@@ -6,13 +6,19 @@ import 'package:image_picker/image_picker.dart';
 import '../../models/ficha.dart';
 import '../../providers/categorias_provider.dart';
 import '../../providers/fichas_provider.dart';
+import '../../providers/etiquetas_provider.dart';
 import '../widgets/etiqueta_chip.dart';
 
 /// Pantalla para crear, visualizar y editar una ficha del archivador.
 class DetalleEditorScreen extends ConsumerStatefulWidget {
   final Ficha? ficha;
+  final int? categoriaIdInicial;
 
-  const DetalleEditorScreen({super.key, this.ficha});
+  const DetalleEditorScreen({
+    super.key,
+    this.ficha,
+    this.categoriaIdInicial,
+  });
 
   @override
   ConsumerState<DetalleEditorScreen> createState() => _DetalleEditorScreenState();
@@ -22,7 +28,6 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _tituloController;
   late TextEditingController _descripcionController;
-  late TextEditingController _nuevaEtiquetaController;
 
   int? _categoriaIdSeleccionada;
   File? _nuevaImagenArchivo;
@@ -39,9 +44,8 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
     super.initState();
     _tituloController = TextEditingController(text: widget.ficha?.titulo ?? '');
     _descripcionController = TextEditingController(text: widget.ficha?.descripcion ?? '');
-    _nuevaEtiquetaController = TextEditingController();
 
-    _categoriaIdSeleccionada = widget.ficha?.categoriaId;
+    _categoriaIdSeleccionada = widget.ficha?.categoriaId ?? widget.categoriaIdInicial;
     _rutaImagenExistente = widget.ficha?.rutaImagen;
     _etiquetas = widget.ficha?.etiquetas.map((e) => e.nombre).toList() ?? [];
   }
@@ -50,7 +54,6 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
   void dispose() {
     _tituloController.dispose();
     _descripcionController.dispose();
-    _nuevaEtiquetaController.dispose();
     super.dispose();
   }
 
@@ -81,18 +84,32 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
     });
   }
 
-  void _agregarEtiqueta() {
-    final texto = _nuevaEtiquetaController.text.trim();
-    if (texto.isNotEmpty && !_etiquetas.contains(texto)) {
-      setState(() {
-        _etiquetas.add(texto);
-        _nuevaEtiquetaController.clear();
-      });
-    }
-  }
-
   Future<void> _guardar() async {
     if (!_formKey.currentState!.validate()) return;
+
+    // Si es edición de una ficha existente, pedir confirmación antes de modificar
+    if (_esEdicion) {
+      final confirmar = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Confirmar modificación'),
+          content: const Text(
+            '¿Estás seguro de que deseas guardar los cambios realizados en esta ficha?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Guardar cambios'),
+            ),
+          ],
+        ),
+      );
+      if (confirmar != true) return;
+    }
 
     setState(() => _guardando = true);
 
@@ -118,6 +135,9 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
           etiquetas: _etiquetas,
         );
       }
+
+      // Invalidar etiquetasProvider para reflejar nuevas etiquetas creadas
+      ref.invalidate(etiquetasProvider);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -224,43 +244,48 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
 
                     // --- SELECCIÓN DE CATEGORÍA ---
                     categoriasAsync.when(
-                      data: (categorias) => DropdownButtonFormField<int>(
-                        initialValue: _categoriaIdSeleccionada,
-                        decoration: const InputDecoration(
-                          labelText: 'Categoría',
-                          border: OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.folder_outlined),
-                        ),
-                        hint: const Text('Seleccionar categoría'),
-                        items: [
-                          const DropdownMenuItem<int>(
-                            value: null,
-                            child: Text('Sin categoría'),
+                      data: (categorias) {
+                        final existeSeleccion = categorias.any((c) => c.id == _categoriaIdSeleccionada);
+                        final valorSeguro = existeSeleccion ? _categoriaIdSeleccionada : null;
+
+                        return DropdownButtonFormField<int?>(
+                          initialValue: valorSeguro,
+                          decoration: const InputDecoration(
+                            labelText: 'Categoría',
+                            border: OutlineInputBorder(),
+                            prefixIcon: Icon(Icons.folder_outlined),
                           ),
-                          ...categorias.map(
-                            (c) => DropdownMenuItem<int>(
-                              value: c.id,
-                              child: Row(
-                                children: [
-                                  Container(
-                                    width: 12,
-                                    height: 12,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: _colorDesdeHex(c.colorHex),
+                          hint: const Text('Errante (Por defecto)'),
+                          items: [
+                            const DropdownMenuItem<int?>(
+                              value: null,
+                              child: Text('Sin asignar (irá a Errante)'),
+                            ),
+                            ...categorias.map(
+                              (c) => DropdownMenuItem<int?>(
+                                value: c.id,
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 12,
+                                      height: 12,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: _colorDesdeHex(c.colorHex),
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(c.nombre),
-                                ],
+                                    const SizedBox(width: 8),
+                                    Text(c.nombre),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                        ],
-                        onChanged: (nuevoId) {
-                          setState(() => _categoriaIdSeleccionada = nuevoId);
-                        },
-                      ),
+                          ],
+                          onChanged: (nuevoId) {
+                            setState(() => _categoriaIdSeleccionada = nuevoId);
+                          },
+                        );
+                      },
                       loading: () => const LinearProgressIndicator(),
                       error: (err, _) => Text('Error al cargar categorías: $err'),
                     ),
@@ -280,32 +305,74 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
                     ),
                     const SizedBox(height: 20),
 
-                    // --- SECCIÓN DE ETIQUETAS ---
+                    // --- SECCIÓN DE ETIQUETAS CON AUTOCOMPLETADO ---
                     const Text(
                       'Etiquetas',
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _nuevaEtiquetaController,
-                            decoration: const InputDecoration(
-                              hintText: 'Añadir etiqueta (ej. Impuestos, Auto)',
-                              isDense: true,
-                              border: OutlineInputBorder(),
+                    Autocomplete<String>(
+                      optionsBuilder: (TextEditingValue textEditingValue) {
+                        final texto = textEditingValue.text.trim();
+                        if (texto.isEmpty) {
+                          return const Iterable<String>.empty();
+                        }
+                        final query = texto.toLowerCase();
+                        final todas = ref.watch(etiquetasProvider).value ?? [];
+                        return todas
+                            .map((e) => e.nombre)
+                            .where((nombre) =>
+                                nombre.toLowerCase().contains(query) && !_etiquetas.contains(nombre));
+                      },
+                      onSelected: (String seleccion) {
+                        if (!_etiquetas.contains(seleccion)) {
+                          setState(() {
+                            _etiquetas.add(seleccion);
+                          });
+                        }
+                      },
+                      fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                        return Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: controller,
+                                focusNode: focusNode,
+                                decoration: const InputDecoration(
+                                  hintText: 'Añadir etiqueta (ej. Impuestos, Auto)',
+                                  isDense: true,
+                                  border: OutlineInputBorder(),
+                                  prefixIcon: Icon(Icons.label_outline, size: 20),
+                                ),
+                                onSubmitted: (texto) {
+                                  final limpio = texto.trim();
+                                  if (limpio.isNotEmpty && !_etiquetas.contains(limpio)) {
+                                    setState(() {
+                                      _etiquetas.add(limpio);
+                                    });
+                                    controller.clear();
+                                  }
+                                  onFieldSubmitted();
+                                },
+                              ),
                             ),
-                            onSubmitted: (_) => _agregarEtiqueta(),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        IconButton.filled(
-                          onPressed: _agregarEtiqueta,
-                          icon: const Icon(Icons.add),
-                          tooltip: 'Agregar etiqueta',
-                        ),
-                      ],
+                            const SizedBox(width: 8),
+                            IconButton.filled(
+                              onPressed: () {
+                                final limpio = controller.text.trim();
+                                if (limpio.isNotEmpty && !_etiquetas.contains(limpio)) {
+                                  setState(() {
+                                    _etiquetas.add(limpio);
+                                  });
+                                  controller.clear();
+                                }
+                              },
+                              icon: const Icon(Icons.add),
+                              tooltip: 'Agregar etiqueta',
+                            ),
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 10),
                     if (_etiquetas.isNotEmpty)
@@ -398,7 +465,7 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
       return Image.network(
         _rutaImagenExistente!,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => _placeholderSinImagen(),
+        errorBuilder: (_, _, _) => _placeholderSinImagen(),
       );
     }
 
@@ -413,7 +480,7 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
           return Image.file(
             File(_rutaImagenExistente!),
             fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => _placeholderSinImagen(),
+            errorBuilder: (_, _, _) => _placeholderSinImagen(),
           );
         }
         return _placeholderSinImagen();

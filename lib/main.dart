@@ -9,24 +9,24 @@ void main() {
   runApp(
     // ProviderScope provee el contenedor de estado global para Riverpod
     const ProviderScope(
-      child: ArchivadorDigitalApp(),
+      child: SimplistaApp(),
     ),
   );
 }
 
-/// Widget raíz de la aplicación Archivador Digital Visual.
-class ArchivadorDigitalApp extends StatelessWidget {
-  const ArchivadorDigitalApp({super.key});
+/// Widget raíz de la aplicación Simplista.
+class SimplistaApp extends StatelessWidget {
+  const SimplistaApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Archivador Digital',
+      title: 'Simplista',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.indigo,
+          seedColor: const Color(0xFF825385),
           brightness: Brightness.light,
         ),
         appBarTheme: const AppBarTheme(
@@ -44,3 +44,6 @@ class ArchivadorDigitalApp extends StatelessWidget {
     );
   }
 }
+
+/// Alias para mantener retrocompatibilidad en pruebas
+typedef ArchivadorDigitalApp = SimplistaApp;

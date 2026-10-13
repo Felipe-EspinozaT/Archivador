@@ -2,335 +2,622 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/categorias_provider.dart';
 import '../../providers/fichas_provider.dart';
+import '../../providers/etiquetas_provider.dart';
 import '../widgets/ficha_card.dart';
+import '../widgets/categoria_card.dart';
 import 'categorias_screen.dart';
 import 'lista_fichas_screen.dart';
 import 'detalle_editor_screen.dart';
 
-/// Pantalla de inicio del Archivador Digital Visual.
-class InicioScreen extends ConsumerWidget {
+/// Pantalla principal de Simplista.
+class InicioScreen extends ConsumerStatefulWidget {
   const InicioScreen({super.key});
 
-  Color _obtenerColor(String? hexString) {
-    if (hexString == null || hexString.isEmpty) return Colors.indigo;
-    try {
-      final buffer = StringBuffer();
-      if (hexString.length == 6 || hexString.length == 7) buffer.write('ff');
-      buffer.write(hexString.replaceFirst('#', ''));
-      return Color(int.parse(buffer.toString(), radix: 16));
-    } catch (_) {
-      return Colors.indigo;
-    }
-  }
+  @override
+  ConsumerState<InicioScreen> createState() => _InicioScreenState();
+}
+
+class _InicioScreenState extends ConsumerState<InicioScreen> {
+  final TextEditingController _busquedaController = TextEditingController();
+  int? _categoriaSeleccionadaId;
+
+  static const double _tamanoCategoria = 95.0;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final categoriasAsync = ref.watch(categoriasProvider);
-    final fichasAsync = ref.watch(fichasProvider);
+  void dispose() {
+    _busquedaController.dispose();
+    super.dispose();
+  }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Row(
-          children: [
-            Icon(Icons.folder_special, color: Colors.indigo),
-            SizedBox(width: 8),
-            Text('Archivador Digital', style: TextStyle(fontWeight: FontWeight.bold)),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Recargar',
-            onPressed: () {
-              ref.read(categoriasProvider.notifier).cargarCategorias();
-              ref.read(fichasProvider.notifier).cargarFichas();
-            },
-          ),
-        ],
+  /// Muestra un selector modal para adjuntar o quitar etiquetas al filtro de búsqueda.
+  void _mostrarSelectorEtiquetasFiltro() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Banner de estado y métricas
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Colors.indigo, Colors.blueAccent],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.indigo.withValues(alpha: 0.3),
-                      blurRadius: 10,
-                      offset: const Offset(0, 5),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.cloud_off, color: Colors.white70, size: 18),
-                        SizedBox(width: 6),
-                        Text(
-                          'Modo Offline Activo',
-                          style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Tus documentos organizados de manera visual y segura',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        _construirMetrica(
-                          'Total Fichas',
-                          fichasAsync.maybeWhen(
-                            data: (fichas) => '${fichas.length}',
-                            orElse: () => '-',
-                          ),
-                        ),
-                        const SizedBox(width: 24),
-                        _construirMetrica(
-                          'Categorías',
-                          categoriasAsync.maybeWhen(
-                            data: (cat) => '${cat.length}',
-                            orElse: () => '-',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
+      builder: (ctx) {
+        return Consumer(
+          builder: (context, ref, _) {
+            final etiquetasAsync = ref.watch(etiquetasProvider);
+            final seleccionadas = ref.watch(etiquetasFiltroProvider);
 
-            // Sección de Categorías
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                20,
+                20,
+                MediaQuery.of(context).viewInsets.bottom + 24,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Categorías',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
                   Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      TextButton(
-                        onPressed: () {
-                          ref.read(categoriaSeleccionadaProvider.notifier).seleccionar(null);
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const ListaFichasScreen()),
-                          );
-                        },
-                        child: const Text('Ver fichas'),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.settings_outlined, size: 20),
-                        tooltip: 'Gestionar categorías',
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const CategoriasScreen()),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-            categoriasAsync.when(
-              data: (categorias) => SizedBox(
-                height: 110,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  itemCount: categorias.length,
-                  itemBuilder: (context, index) {
-                    final cat = categorias[index];
-                    final color = _obtenerColor(cat.colorHex);
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(16),
-                        onTap: () {
-                          // Filtrar por esta categoría y navegar a la lista
-                          ref.read(categoriaSeleccionadaProvider.notifier).seleccionar(cat.id);
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const ListaFichasScreen()),
-                          );
-                        },
-                        child: Container(
-                          width: 130,
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: color.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: color.withValues(alpha: 0.3)),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              CircleAvatar(
-                                backgroundColor: color,
-                                radius: 14,
-                                child: const Icon(Icons.folder, color: Colors.white, size: 16),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                cat.nombre,
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              loading: () => const SizedBox(
-                height: 100,
-                child: Center(child: CircularProgressIndicator()),
-              ),
-              error: (e, _) => Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Text('Error al cargar categorías: $e'),
-              ),
-            ),
-
-            const SizedBox(height: 16),
-
-            // Sección de Fichas Recientes
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Fichas Recientes',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  TextButton.icon(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const ListaFichasScreen()),
-                      );
-                    },
-                    icon: const Icon(Icons.list, size: 18),
-                    label: const Text('Explorar'),
-                  ),
-                ],
-              ),
-            ),
-
-            fichasAsync.when(
-              data: (fichas) {
-                if (fichas.isEmpty) {
-                  return Padding(
-                    padding: const EdgeInsets.all(24.0),
-                    child: Center(
-                      child: Column(
+                      const Row(
                         children: [
-                          Icon(Icons.note_add_outlined, size: 48, color: Colors.grey.shade400),
-                          const SizedBox(height: 8),
+                          Icon(Icons.label_outline, color: Color(0xFF825385)),
+                          SizedBox(width: 8),
                           Text(
-                            'Aún no tienes fichas guardadas.',
-                            style: TextStyle(color: Colors.grey.shade600),
+                            'Filtrar por etiquetas',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ],
                       ),
-                    ),
-                  );
-                }
-
-                // Mostrar las 4 más recientes
-                final recientes = fichas.take(4).toList();
-                return Column(
-                  children: recientes.map((f) {
-                    return FichaCard(
-                      ficha: f,
-                      alPresionar: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => DetalleEditorScreen(ficha: f),
+                      if (seleccionadas.isNotEmpty)
+                        TextButton(
+                          onPressed: () {
+                            ref.read(etiquetasFiltroProvider.notifier).limpiar();
+                          },
+                          child: const Text('Limpiar todo'),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  etiquetasAsync.when(
+                    data: (etiquetas) {
+                      if (etiquetas.isEmpty) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 20),
+                          child: Center(
+                            child: Text(
+                              'Aún no hay etiquetas creadas en tus fichas.',
+                              style: TextStyle(color: Colors.grey),
+                            ),
                           ),
                         );
-                      },
-                    );
-                  }).toList(),
-                );
-              },
-              loading: () => const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(24.0),
-                  child: CircularProgressIndicator(),
-                ),
-              ),
-              error: (e, _) => Center(child: Text('Error: $e')),
-            ),
+                      }
 
-            const SizedBox(height: 80),
-          ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const DetalleEditorScreen()),
-          );
-        },
-        icon: const Icon(Icons.add_photo_alternate),
-        label: const Text('Nueva Ficha'),
-      ),
+                      return Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: etiquetas.map((et) {
+                          final activa = seleccionadas.contains(et.nombre);
+                          return FilterChip(
+                            label: Text(et.nombre),
+                            selected: activa,
+                            selectedColor:
+                                const Color(0xFF825385).withValues(alpha: 0.2),
+                            checkmarkColor: const Color(0xFF825385),
+                            onSelected: (_) {
+                              ref
+                                  .read(etiquetasFiltroProvider.notifier)
+                                  .alternarEtiqueta(et.nombre);
+                            },
+                          );
+                        }).toList(),
+                      );
+                    },
+                    loading: () => const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(16.0),
+                        child: CircularProgressIndicator(),
+                      ),
+                    ),
+                    error: (e, _) => Text('Error al cargar etiquetas: $e'),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Listo'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
-  Widget _construirMetrica(String etiqueta, String valor) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          valor,
-          style: const TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
+  @override
+  Widget build(BuildContext context) {
+    final categoriasAsync = ref.watch(categoriasProvider);
+    final fichasAsync = ref.watch(fichasProvider);
+    final fichasRecientesAsync = ref.watch(fichasRecientesProvider);
+    final etiquetasFiltro = ref.watch(etiquetasFiltroProvider);
+    final textoBusqueda = ref.watch(busquedaFichasProvider);
+
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xFF825385),
+            Color(0xFFEF9810),
+          ],
+        ),
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: Builder(
+            builder: (ctx) => IconButton(
+              icon: const Icon(Icons.person, color: Colors.white, size: 28),
+              tooltip: 'Menú de usuario',
+              onPressed: () => Scaffold.of(ctx).openDrawer(),
+            ),
+          ),
+          title: const Text(
+            'Simplista',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+              fontSize: 22,
+            ),
           ),
         ),
-        Text(
-          etiqueta,
-          style: const TextStyle(
-            fontSize: 12,
-            color: Colors.white70,
+        drawer: Drawer(
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              const DrawerHeader(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Color(0xFF825385),
+                      Color(0xFFEF9810),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    CircleAvatar(
+                      radius: 28,
+                      backgroundColor: Colors.white,
+                      child: Icon(Icons.person, size: 36, color: Color(0xFF825385)),
+                    ),
+                    SizedBox(height: 10),
+                    Text(
+                      'Simplista',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.account_circle_outlined),
+                title: const Text('Cuenta'),
+                onTap: () {},
+              ),
+              ListTile(
+                leading: const Icon(Icons.palette_outlined),
+                title: const Text('Temas'),
+                onTap: () {},
+              ),
+              ListTile(
+                leading: const Icon(Icons.backup_outlined),
+                title: const Text('Backup'),
+                onTap: () {},
+              ),
+              ListTile(
+                leading: const Icon(Icons.lightbulb_outline),
+                title: const Text('Sugerencias'),
+                onTap: () {},
+              ),
+            ],
           ),
         ),
-      ],
+        body: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Buscador de fichas con botón para adjuntar etiquetas al filtro
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: SearchBar(
+                        controller: _busquedaController,
+                        hintText: 'Buscar fichas...',
+                        leading: const Icon(Icons.search, color: Colors.black54),
+                        trailing: [
+                          if (_busquedaController.text.isNotEmpty ||
+                              textoBusqueda.isNotEmpty)
+                            IconButton(
+                              icon: const Icon(Icons.clear, size: 20),
+                              onPressed: () {
+                                setState(() {
+                                  _busquedaController.clear();
+                                });
+                                ref.read(busquedaFichasProvider.notifier).actualizar('');
+                              },
+                            ),
+                        ],
+                        onChanged: (query) {
+                          setState(() {});
+                          ref.read(busquedaFichasProvider.notifier).actualizar(query);
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Badge(
+                      isLabelVisible: etiquetasFiltro.isNotEmpty,
+                      label: Text('${etiquetasFiltro.length}'),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: etiquetasFiltro.isNotEmpty
+                              ? Colors.amber.shade100
+                              : Colors.white.withValues(alpha: 0.9),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: IconButton(
+                          icon: const Icon(
+                            Icons.label_outline,
+                            color: Color(0xFF825385),
+                          ),
+                          tooltip: 'Adjuntar etiquetas al filtro',
+                          onPressed: _mostrarSelectorEtiquetasFiltro,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Chips de etiquetas adjuntadas al filtro en la barra de búsqueda
+              if (etiquetasFiltro.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+                  child: Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: etiquetasFiltro.map((tag) {
+                      return InputChip(
+                        label: Text(
+                          tag,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF825385),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        backgroundColor: Colors.white,
+                        deleteIconColor: Colors.red.shade400,
+                        onDeleted: () {
+                          ref
+                              .read(etiquetasFiltroProvider.notifier)
+                              .eliminarEtiqueta(tag);
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ),
+
+              const SizedBox(height: 6),
+
+              // Carrusel horizontal superior de Fichas Recientes (INDEPENDIENTE del filtro de búsqueda/etiquetas)
+              fichasRecientesAsync.when(
+                data: (recientes) {
+                  if (recientes.isEmpty) {
+                    return const SizedBox(
+                      height: 50,
+                      child: Center(
+                        child: Text(
+                          'No hay recientes',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+
+                  return SizedBox(
+                    height: 80,
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      itemCount: recientes.length,
+                      itemBuilder: (context, index) {
+                        final ficha = recientes[index];
+                        return FichaCard(
+                          ficha: ficha,
+                          ancho: 82,
+                          alto: 74,
+                          alPresionar: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => DetalleEditorScreen(ficha: ficha),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  );
+                },
+                loading: () => const SizedBox(
+                  height: 80,
+                  child: Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
+                ),
+                error: (e, _) => SizedBox(
+                  height: 60,
+                  child: Center(
+                    child: Text('Error: $e', style: const TextStyle(color: Colors.white)),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 14),
+
+              // Sección de Categorías
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Categorías',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.settings_outlined, size: 20, color: Colors.white),
+                      tooltip: 'Gestionar y ordenar categorías',
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const CategoriasScreen()),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              categoriasAsync.when(
+                data: (categorias) {
+                  if (categorias.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.all(16.0),
+                      child: Text(
+                        'No hay categorías disponibles',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    );
+                  }
+
+                  // Validar que _categoriaSeleccionadaId exista en la lista actual; si no, usar la primera
+                  final existeEnLista =
+                      categorias.any((c) => c.id == _categoriaSeleccionadaId);
+                  final categoriaActivaId = existeEnLista
+                      ? _categoriaSeleccionadaId
+                      : categorias.first.id;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Listado horizontal de tarjetas cuadradas de categorías
+                      SizedBox(
+                        height: _tamanoCategoria + 14,
+                        child: ListView.builder(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          itemCount: categorias.length,
+                          itemBuilder: (context, index) {
+                            final cat = categorias[index];
+                            final esSeleccionada = cat.id == categoriaActivaId;
+
+                            return CategoriaCard(
+                              key: ValueKey(cat.id ?? index),
+                              categoria: cat,
+                              esSeleccionada: esSeleccionada,
+                              tamano: _tamanoCategoria,
+                              alPresionar: () {
+                                setState(() {
+                                  _categoriaSeleccionadaId = cat.id;
+                                });
+                              },
+                            );
+                          },
+                        ),
+                      ),
+
+                      const SizedBox(height: 14),
+
+                      // Encabezado de la lista vertical de fichas de la categoría activa
+                      Builder(
+                        builder: (context) {
+                          final catActual = categorias.firstWhere(
+                            (c) => c.id == categoriaActivaId,
+                            orElse: () => categorias.first,
+                          );
+
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  catActual.nombre,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                TextButton(
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  onPressed: () async {
+                                    ref
+                                        .read(categoriaSeleccionadaProvider.notifier)
+                                        .seleccionar(catActual.id);
+                                    await Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => const ListaFichasScreen(),
+                                      ),
+                                    );
+                                    // Al regresar, limpiar el filtro de pantalla secundaria
+                                    ref
+                                        .read(categoriaSeleccionadaProvider.notifier)
+                                        .seleccionar(null);
+                                  },
+                                  child: const Text('Ver todas'),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+
+                      // Listado vertical de fichas de la categoría activa (aplicando filtro de búsqueda y etiquetas si existen)
+                      fichasAsync.when(
+                        data: (fichas) {
+                          final fichasFiltradas = fichas
+                              .where((f) => f.categoriaId == categoriaActivaId)
+                              .toList();
+
+                          if (fichasFiltradas.isEmpty) {
+                            return const Padding(
+                              padding: EdgeInsets.symmetric(
+                                vertical: 24.0,
+                                horizontal: 16.0,
+                              ),
+                              child: Center(
+                                child: Text(
+                                  'No hay fichas en esta categoría',
+                                  style: TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
+
+                          return Column(
+                            children: fichasFiltradas.map((ficha) {
+                              return FichaDetalleCard(
+                                ficha: ficha,
+                                alPresionar: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => DetalleEditorScreen(ficha: ficha),
+                                    ),
+                                  );
+                                },
+                              );
+                            }).toList(),
+                          );
+                        },
+                        loading: () => const Padding(
+                          padding: EdgeInsets.all(24.0),
+                          child: Center(
+                            child: CircularProgressIndicator(color: Colors.white),
+                          ),
+                        ),
+                        error: (e, _) => Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Text('Error: $e', style: const TextStyle(color: Colors.white)),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+                loading: () => SizedBox(
+                  height: _tamanoCategoria + 14,
+                  child: const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
+                ),
+                error: (e, _) => Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Text('Error: $e', style: const TextStyle(color: Colors.white)),
+                ),
+              ),
+
+              const SizedBox(height: 80),
+            ],
+          ),
+        ),
+        floatingActionButton: Builder(
+          builder: (context) {
+            final categorias = categoriasAsync.value;
+            final existeEnLista = categorias != null &&
+                categorias.any((c) => c.id == _categoriaSeleccionadaId);
+            final catActivaId = existeEnLista
+                ? _categoriaSeleccionadaId
+                : (categorias != null && categorias.isNotEmpty
+                    ? categorias.first.id
+                    : null);
+
+            return FloatingActionButton.extended(
+              backgroundColor: Colors.white,
+              foregroundColor: const Color(0xFF825385),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => DetalleEditorScreen(
+                      categoriaIdInicial: catActivaId,
+                    ),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.add_photo_alternate),
+              label: const Text(
+                'Nueva Ficha',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 }

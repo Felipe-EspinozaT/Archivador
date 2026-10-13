@@ -121,7 +121,11 @@ class _ListaFichasScreenState extends ConsumerState<ListaFichasScreen> {
           Expanded(
             child: fichasAsync.when(
               data: (fichas) {
-                if (fichas.isEmpty) {
+                final fichasFiltradas = categoriaSeleccionada == null
+                    ? fichas
+                    : fichas.where((f) => f.categoriaId == categoriaSeleccionada).toList();
+
+                if (fichasFiltradas.isEmpty) {
                   return Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -142,7 +146,11 @@ class _ListaFichasScreenState extends ConsumerState<ListaFichasScreen> {
                           onPressed: () {
                             Navigator.push(
                               context,
-                              MaterialPageRoute(builder: (_) => const DetalleEditorScreen()),
+                              MaterialPageRoute(
+                                builder: (_) => DetalleEditorScreen(
+                                  categoriaIdInicial: categoriaSeleccionada,
+                                ),
+                              ),
                             );
                           },
                           icon: const Icon(Icons.add),
@@ -158,10 +166,10 @@ class _ListaFichasScreenState extends ConsumerState<ListaFichasScreen> {
                     await ref.read(fichasProvider.notifier).cargarFichas();
                   },
                   child: ListView.builder(
-                    itemCount: fichas.length,
+                    itemCount: fichasFiltradas.length,
                     itemBuilder: (context, index) {
-                      final ficha = fichas[index];
-                      return FichaCard(
+                      final ficha = fichasFiltradas[index];
+                      return FichaDetalleCard(
                         ficha: ficha,
                         alPresionar: () {
                           Navigator.push(
@@ -188,7 +196,11 @@ class _ListaFichasScreenState extends ConsumerState<ListaFichasScreen> {
         onPressed: () {
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => const DetalleEditorScreen()),
+            MaterialPageRoute(
+              builder: (_) => DetalleEditorScreen(
+                categoriaIdInicial: categoriaSeleccionada,
+              ),
+            ),
           );
         },
         icon: const Icon(Icons.add),

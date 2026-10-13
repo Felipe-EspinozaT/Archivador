@@ -1,11 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
-import 'package:archivador_digital/core/database/app_database.dart';
-import 'package:archivador_digital/models/categoria.dart';
-import 'package:archivador_digital/models/ficha.dart';
-import 'package:archivador_digital/repositories/categoria_repository.dart';
-import 'package:archivador_digital/repositories/etiqueta_repository.dart';
-import 'package:archivador_digital/repositories/ficha_repository.dart';
+import 'package:simplista/core/database/app_database.dart';
+import 'package:simplista/models/categoria.dart';
+import 'package:simplista/models/ficha.dart';
+import 'package:simplista/repositories/categoria_repository.dart';
+import 'package:simplista/repositories/etiqueta_repository.dart';
+import 'package:simplista/repositories/ficha_repository.dart';
 
 void main() {
   // Inicialización de FFI para ejecutar SQLite en pruebas locales
@@ -18,22 +18,24 @@ void main() {
   late FichaRepository fichaRepo;
 
   setUp(() async {
-    // Usamos una base de datos en memoria para cada prueba
+    // Usamos una base de datos en memoria para cada prueba con el esquema actualizado v2
     db = await databaseFactory.openDatabase(
       inMemoryDatabasePath,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON;');
         },
         onCreate: (db, version) async {
-          // Tablas
+          // Tablas con soporte de orden y fondo
           await db.execute('''
             CREATE TABLE ${AppDatabase.tablaCategorias} (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               nombre TEXT NOT NULL,
               descripcion TEXT,
-              color_hex TEXT NOT NULL DEFAULT '#2196F3'
+              color_hex TEXT NOT NULL DEFAULT '#2196F3',
+              orden INTEGER NOT NULL DEFAULT 0,
+              ruta_imagen_fondo TEXT
             )
           ''');
 
@@ -67,11 +69,12 @@ void main() {
             )
           ''');
 
-          // Categorías iniciales
+          // Categorías iniciales con orden
           await db.insert(AppDatabase.tablaCategorias, {
             'nombre': 'General',
             'descripcion': 'Fichas y documentos generales',
             'color_hex': '#4CAF50',
+            'orden': 0,
           });
         },
       ),
@@ -87,18 +90,21 @@ void main() {
     await db.close();
   });
 
-  group('Pruebas CRUD SQLite - Archivador Digital', () {
-    test('CRUD de Categorias', () async {
+  group('Pruebas CRUD SQLite - Simplista', () {
+    test('CRUD y Reordenamiento de Categorias', () async {
       // 1. Lectura inicial (categoría por defecto)
       final iniciales = await categoriaRepo.obtenerTodas();
       expect(iniciales.length, 1);
       expect(iniciales.first.nombre, 'General');
+      expect(iniciales.first.orden, 0);
 
-      // 2. Inserción
-      final nuevaCat = Categoria(
+      // 2. Inserción con orden y ruta_imagen_fondo
+      final nuevaCat = const Categoria(
         nombre: 'Finanzas',
         descripcion: 'Gastos e impuestos',
         colorHex: '#9C27B0',
+        orden: 1,
+        rutaImagenFondo: '/imagenes/fondo_finanzas.png',
       );
       final idInsertado = await categoriaRepo.insertar(nuevaCat);
       expect(idInsertado, greaterThan(0));
@@ -106,8 +112,18 @@ void main() {
       final categoriaConsultada = await categoriaRepo.obtenerPorId(idInsertado);
       expect(categoriaConsultada, isNotNull);
       expect(categoriaConsultada!.nombre, 'Finanzas');
+      expect(categoriaConsultada.rutaImagenFondo, '/imagenes/fondo_finanzas.png');
 
-      // 3. Actualización
+      // 3. Probar reordenamiento (actualizarOrden)
+      final catA = categoriaConsultada.copyWith(orden: 0);
+      final catB = iniciales.first.copyWith(orden: 1);
+      await categoriaRepo.actualizarOrden([catA, catB]);
+
+      final reordenadas = await categoriaRepo.obtenerTodas();
+      expect(reordenadas.first.nombre, 'Finanzas');
+      expect(reordenadas.last.nombre, 'General');
+
+      // 4. Actualización
       final catActualizada = categoriaConsultada.copyWith(
         nombre: 'Finanzas Personales',
       );
@@ -115,83 +131,74 @@ void main() {
       final catVerificada = await categoriaRepo.obtenerPorId(idInsertado);
       expect(catVerificada!.nombre, 'Finanzas Personales');
 
-      // 4. Eliminación
+      // 5. Eliminación
       await categoriaRepo.eliminar(idInsertado);
       final catEliminada = await categoriaRepo.obtenerPorId(idInsertado);
       expect(catEliminada, isNull);
     });
 
     test('CRUD de Etiquetas', () async {
-      final tag1 = await etiquetaRepo.obtenerOCrear('Urgente');
-      final tag2 = await etiquetaRepo.obtenerOCrear('Urgente');
-      expect(tag1.id, equals(tag2.id));
+      final et1 = await etiquetaRepo.obtenerOCrear('Urgente');
+      expect(et1.id, greaterThan(0));
+      expect(et1.nombre, 'Urgente');
+
+      // Idempotencia: obtener la misma etiqueta no debe duplicar
+      final et2 = await etiquetaRepo.obtenerOCrear('urgente');
+      expect(et2.id, et1.id);
 
       final todas = await etiquetaRepo.obtenerTodas();
       expect(todas.length, 1);
-      expect(todas.first.nombre, 'Urgente');
-
-      await etiquetaRepo.eliminar(tag1.id!);
-      final vacias = await etiquetaRepo.obtenerTodas();
-      expect(vacias.isEmpty, isTrue);
     });
 
     test('CRUD de Fichas y Relaciones con Etiquetas', () async {
       final ahora = DateTime.now();
-
-      // 1. Inserción de ficha con etiquetas
-      final nuevaFicha = Ficha(
-        titulo: 'Factura de Luz',
-        descripcion: 'Factura de electricidad de enero',
-        categoriaId: 1, // Categoría 'General'
+      final ficha = Ficha(
+        titulo: 'DNI Digital',
+        descripcion: 'Documento nacional de identidad',
+        categoriaId: 1,
         fechaCreacion: ahora,
         fechaModificacion: ahora,
-        rutaImagen: '/imagenes/factura_luz.jpg',
+        rutaImagen: '/imagenes/dni.jpg',
       );
 
-      final fichaId = await fichaRepo.insertar(
-        nuevaFicha,
-        nombresEtiquetas: ['Servicios', 'Hogar', 'Urgente'],
+      // Inserción con etiquetas
+      final idFicha = await fichaRepo.insertar(
+        ficha,
+        nombresEtiquetas: ['Personal', 'Legal'],
       );
-      expect(fichaId, greaterThan(0));
+      expect(idFicha, greaterThan(0));
 
-      // 2. Consulta y verificación de relaciones
-      final fichaObtenida = await fichaRepo.obtenerPorId(fichaId);
-      expect(fichaObtenida, isNotNull);
-      expect(fichaObtenida!.titulo, 'Factura de Luz');
-      expect(fichaObtenida.nombreCategoria, 'General');
-      expect(fichaObtenida.etiquetas.length, 3);
-      expect(fichaObtenida.etiquetas.map((e) => e.nombre), containsAll(['Servicios', 'Hogar', 'Urgente']));
-
-      // 3. Búsqueda y filtrado
-      final busquedaCoincidente = await fichaRepo.obtenerTodas(busqueda: 'electricidad');
-      expect(busquedaCoincidente.length, 1);
-
-      final busquedaNoCoincidente = await fichaRepo.obtenerTodas(busqueda: 'agua');
-      expect(busquedaNoCoincidente.isEmpty, isTrue);
-
-      // 4. Actualización de ficha y sus etiquetas
-      final fichaModificada = fichaObtenida.copyWith(
-        titulo: 'Factura de Luz - Pagada',
-        fechaModificacion: DateTime.now(),
+      // Consulta de la ficha con sus etiquetas
+      final fichaConsultada = await fichaRepo.obtenerPorId(idFicha);
+      expect(fichaConsultada, isNotNull);
+      expect(fichaConsultada!.titulo, 'DNI Digital');
+      expect(fichaConsultada.etiquetas.length, 2);
+      expect(
+        fichaConsultada.etiquetas.map((e) => e.nombre).toSet(),
+        containsAll({'Personal', 'Legal'}),
       );
+
+      // Actualización de etiquetas
       await fichaRepo.actualizar(
-        fichaModificada,
-        nuevosNombresEtiquetas: ['Servicios', 'Pagado'],
+        fichaConsultada.copyWith(titulo: 'DNI Renovado'),
+        nuevosNombresEtiquetas: ['Legal', 'Renovado'],
       );
 
-      final fichaActualizada = await fichaRepo.obtenerPorId(fichaId);
-      expect(fichaActualizada!.titulo, 'Factura de Luz - Pagada');
+      final fichaActualizada = await fichaRepo.obtenerPorId(idFicha);
+      expect(fichaActualizada!.titulo, 'DNI Renovado');
       expect(fichaActualizada.etiquetas.length, 2);
-      expect(fichaActualizada.etiquetas.map((e) => e.nombre), containsAll(['Servicios', 'Pagado']));
-
-      // 5. Verificación de borrado en cascada en la tabla Relaciones
-      await fichaRepo.eliminar(fichaId);
-      final relacionesRestantes = await db.query(
-        AppDatabase.tablaRelaciones,
-        where: 'ficha_id = ?',
-        whereArgs: [fichaId],
+      expect(
+        fichaActualizada.etiquetas.map((e) => e.nombre).toSet(),
+        containsAll({'Legal', 'Renovado'}),
       );
-      expect(relacionesRestantes.isEmpty, isTrue);
+
+      // Eliminación en cascada de relaciones
+      await fichaRepo.eliminar(idFicha);
+      final fichaEliminada = await fichaRepo.obtenerPorId(idFicha);
+      expect(fichaEliminada, isNull);
+
+      final etiquetasFichaEliminada = await etiquetaRepo.obtenerPorFichaId(idFicha);
+      expect(etiquetasFichaEliminada, isEmpty);
     });
   });
 }

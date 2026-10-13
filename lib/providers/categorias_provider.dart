@@ -2,8 +2,9 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/categoria.dart';
 import 'database_provider.dart';
+import 'fichas_provider.dart';
 
-/// Notificador reactivo para la gestión de categorías en Riverpod 3.
+/// Notificador reactivo para la gestión y reordenamiento de categorías en Riverpod 3.
 class CategoriasNotifier extends AsyncNotifier<List<Categoria>> {
   @override
   FutureOr<List<Categoria>> build() async {
@@ -20,23 +21,65 @@ class CategoriasNotifier extends AsyncNotifier<List<Categoria>> {
     });
   }
 
+  /// Reordena las categorías visualmente y persiste el nuevo orden en SQLite.
+  Future<void> reordenarCategorias(int oldIndex, int newIndex) async {
+    final categoriasActuales = state.value;
+    if (categoriasActuales == null) return;
+
+    final lista = List<Categoria>.from(categoriasActuales);
+    if (oldIndex < 0 || oldIndex >= lista.length) return;
+    final item = lista.removeAt(oldIndex);
+    final indiceInsercion = newIndex.clamp(0, lista.length);
+    lista.insert(indiceInsercion, item);
+
+    // Reasignar campo orden correlativamente
+    final listaConOrden = <Categoria>[];
+    for (int i = 0; i < lista.length; i++) {
+      listaConOrden.add(lista[i].copyWith(orden: i));
+    }
+
+    // Actualizar estado inmediatamente para retroalimentación instantánea
+    state = AsyncValue.data(listaConOrden);
+
+    // Persistir el orden en SQLite
+    final repo = ref.read(categoriaRepositoryProvider);
+    await repo.actualizarOrden(listaConOrden);
+  }
+
   /// Agrega una nueva categoría.
-  Future<void> agregarCategoria(String nombre, String? descripcion, String colorHex) async {
+  Future<void> agregarCategoria(
+    String nombre,
+    String? descripcion,
+    String colorHex, {
+    String? rutaImagenFondo,
+  }) async {
     final repo = ref.read(categoriaRepositoryProvider);
     await repo.insertar(Categoria(
       nombre: nombre,
       descripcion: descripcion,
       colorHex: colorHex,
+      rutaImagenFondo: rutaImagenFondo,
     ));
     ref.invalidateSelf();
     await future;
   }
 
-  /// Elimina una categoría por su ID.
-  Future<void> eliminarCategoria(int id) async {
+  /// Actualiza una categoría existente.
+  Future<void> actualizarCategoria(Categoria categoria) async {
     final repo = ref.read(categoriaRepositoryProvider);
-    await repo.eliminar(id);
+    await repo.actualizar(categoria);
     ref.invalidateSelf();
+    await future;
+  }
+
+  /// Elimina una categoría por su ID, con opción de eliminar o reasignar fichas a Errante.
+  Future<void> eliminarCategoria(int id, {bool eliminarFichasDependientes = false}) async {
+    final repo = ref.read(categoriaRepositoryProvider);
+    await repo.eliminar(id, eliminarFichasDependientes: eliminarFichasDependientes);
+    ref.invalidateSelf();
+    // Invalidar fichas para reflejar cambios (borradas o reasignadas a Errante)
+    ref.invalidate(fichasProvider);
+    ref.invalidate(fichasRecientesProvider);
     await future;
   }
 }
@@ -46,7 +89,7 @@ final categoriasProvider = AsyncNotifierProvider<CategoriasNotifier, List<Catego
   CategoriasNotifier.new,
 );
 
-/// Notificador para la categoría seleccionada como filtro.
+/// Notificador para la categoría seleccionada como filtro en la pantalla de lista.
 class CategoriaSeleccionadaNotifier extends Notifier<int?> {
   @override
   int? build() => null;

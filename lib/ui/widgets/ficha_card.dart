@@ -4,26 +4,30 @@ import 'package:flutter/material.dart';
 import '../../models/ficha.dart';
 import 'etiqueta_chip.dart';
 
-/// Tarjeta visual para representar una ficha en listas y cuadrículas.
+/// Tarjeta visual compacta y achatada para el carrusel horizontal superior de fichas recientes.
 class FichaCard extends StatelessWidget {
   final Ficha ficha;
   final VoidCallback alPresionar;
+  final double ancho;
+  final double alto;
 
   const FichaCard({
     super.key,
     required this.ficha,
     required this.alPresionar,
+    this.ancho = 82.0,
+    this.alto = 75.0,
   });
 
   Color _obtenerColorCategoria(String? hexString) {
-    if (hexString == null || hexString.isEmpty) return Colors.indigo;
+    if (hexString == null || hexString.isEmpty) return const Color(0xFF825385);
     try {
       final buffer = StringBuffer();
       if (hexString.length == 6 || hexString.length == 7) buffer.write('ff');
       buffer.write(hexString.replaceFirst('#', ''));
       return Color(int.parse(buffer.toString(), radix: 16));
     } catch (_) {
-      return Colors.indigo;
+      return const Color(0xFF825385);
     }
   }
 
@@ -33,7 +37,80 @@ class FichaCard extends StatelessWidget {
 
     return Card(
       elevation: 2,
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: alPresionar,
+        child: Container(
+          width: ancho,
+          height: alto,
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              CircleAvatar(
+                radius: 14,
+                backgroundColor: colorCat.withValues(alpha: 0.15),
+                child: Icon(
+                  ficha.rutaImagen != null && ficha.rutaImagen!.isNotEmpty
+                      ? Icons.image_outlined
+                      : Icons.description_outlined,
+                  color: colorCat,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                ficha.titulo,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Tarjeta vertical con detalles (miniatura, título, descripción y etiquetas)
+/// para el listado vertical de fichas por categoría.
+class FichaDetalleCard extends StatelessWidget {
+  final Ficha ficha;
+  final VoidCallback alPresionar;
+
+  const FichaDetalleCard({
+    super.key,
+    required this.ficha,
+    required this.alPresionar,
+  });
+
+  Color _obtenerColorCategoria(String? hexString) {
+    if (hexString == null || hexString.isEmpty) return const Color(0xFF825385);
+    try {
+      final buffer = StringBuffer();
+      if (hexString.length == 6 || hexString.length == 7) buffer.write('ff');
+      buffer.write(hexString.replaceFirst('#', ''));
+      return Color(int.parse(buffer.toString(), radix: 16));
+    } catch (_) {
+      return const Color(0xFF825385);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorCat = _obtenerColorCategoria(ficha.colorCategoria);
+
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -43,66 +120,48 @@ class FichaCard extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Miniatura de la imagen
+              // Miniatura o icono de imagen
               ClipRRect(
                 borderRadius: BorderRadius.circular(10),
                 child: SizedBox(
-                  width: 80,
-                  height: 80,
-                  child: _ImagenMiniatura(rutaImagen: ficha.rutaImagen),
+                  width: 65,
+                  height: 65,
+                  child: _MiniaturaFicha(
+                    rutaImagen: ficha.rutaImagen,
+                    colorPrimario: colorCat,
+                  ),
                 ),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
 
-              // Contenido descriptivo
+              // Detalles descriptivos
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Indicador de Categoría
-                    if (ficha.nombreCategoria != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        margin: const EdgeInsets.only(bottom: 4),
-                        decoration: BoxDecoration(
-                          color: colorCat.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          ficha.nombreCategoria!,
-                          style: TextStyle(
-                            color: colorCat,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-
-                    // Título de la Ficha
                     Text(
                       ficha.titulo,
                       style: const TextStyle(
-                        fontSize: 16,
+                        fontSize: 15,
                         fontWeight: FontWeight.bold,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-
-                    // Descripción breve
                     if (ficha.descripcion != null && ficha.descripcion!.isNotEmpty) ...[
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 3),
                       Text(
                         ficha.descripcion!,
-                        style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade700,
+                        ),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],
-
-                    // Etiquetas asociadas
                     if (ficha.etiquetas.isNotEmpty) ...[
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       Wrap(
                         spacing: 4,
                         runSpacing: 4,
@@ -115,7 +174,7 @@ class FichaCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right, color: Colors.grey),
+              const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
             ],
           ),
         ),
@@ -124,11 +183,14 @@ class FichaCard extends StatelessWidget {
   }
 }
 
-/// Widget que carga la imagen de forma asíncrona y muestra un placeholder mientras verifica.
-class _ImagenMiniatura extends StatelessWidget {
+class _MiniaturaFicha extends StatelessWidget {
   final String? rutaImagen;
+  final Color colorPrimario;
 
-  const _ImagenMiniatura({this.rutaImagen});
+  const _MiniaturaFicha({
+    this.rutaImagen,
+    required this.colorPrimario,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -140,11 +202,10 @@ class _ImagenMiniatura extends StatelessWidget {
       return Image.network(
         rutaImagen!,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => _placeholder(),
+        errorBuilder: (_, _, _) => _placeholder(),
       );
     }
 
-    // Para Android/iOS/Desktop: verificar existencia de forma asíncrona
     return FutureBuilder<bool>(
       future: File(rutaImagen!).exists(),
       builder: (context, snapshot) {
@@ -152,27 +213,28 @@ class _ImagenMiniatura extends StatelessWidget {
           return Container(
             color: Colors.grey.shade200,
             child: const Center(
-              child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+              child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
             ),
           );
         }
 
-        final existe = snapshot.data == true;
-        if (!existe) return _placeholder();
+        if (snapshot.data == true) {
+          return Image.file(
+            File(rutaImagen!),
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => _placeholder(),
+          );
+        }
 
-        return Image.file(
-          File(rutaImagen!),
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => _placeholder(),
-        );
+        return _placeholder();
       },
     );
   }
 
   Widget _placeholder() {
     return Container(
-      color: Colors.grey.shade200,
-      child: Icon(Icons.image_not_supported_outlined, color: Colors.grey.shade400, size: 36),
+      color: colorPrimario.withValues(alpha: 0.12),
+      child: Icon(Icons.insert_drive_file_outlined, color: colorPrimario, size: 28),
     );
   }
 }

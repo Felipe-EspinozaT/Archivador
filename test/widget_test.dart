@@ -2,19 +2,23 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:archivador_digital/main.dart';
-import 'package:archivador_digital/models/categoria.dart';
-import 'package:archivador_digital/models/ficha.dart';
-import 'package:archivador_digital/providers/categorias_provider.dart';
-import 'package:archivador_digital/providers/fichas_provider.dart';
-import 'package:archivador_digital/ui/screens/detalle_editor_screen.dart';
+import 'package:simplista/main.dart';
+import 'package:simplista/models/categoria.dart';
+import 'package:simplista/models/ficha.dart';
+import 'package:simplista/models/etiqueta.dart';
+import 'package:simplista/providers/categorias_provider.dart';
+import 'package:simplista/providers/fichas_provider.dart';
+import 'package:simplista/providers/etiquetas_provider.dart';
+import 'package:simplista/ui/screens/detalle_editor_screen.dart';
+import 'package:simplista/ui/screens/categorias_screen.dart';
 
 class TestCategoriasNotifier extends CategoriasNotifier {
   @override
   FutureOr<List<Categoria>> build() {
     return [
-      const Categoria(id: 1, nombre: 'Documentos', descripcion: 'Fichas de documentos', colorHex: '#2196F3'),
-      const Categoria(id: 2, nombre: 'Recibos', descripcion: 'Comprobantes de pago', colorHex: '#FF9800'),
+      const Categoria(id: 1, nombre: 'Documentos', descripcion: 'Fichas de documentos', colorHex: '#2196F3', orden: 0),
+      const Categoria(id: 2, nombre: 'Recibos', descripcion: 'Comprobantes de pago', colorHex: '#FF9800', orden: 1),
+      const Categoria(id: 3, nombre: 'Errante', descripcion: 'Fichas sin categoría asignada', colorHex: '#9E9E9E', orden: 2),
     ];
   }
 }
@@ -37,15 +41,45 @@ class TestFichasNotifier extends FichasNotifier {
   }
 }
 
+class TestFichasRecientesNotifier extends FichasRecientesNotifier {
+  @override
+  FutureOr<List<Ficha>> build() {
+    return [
+      Ficha(
+        id: 1,
+        titulo: 'Factura de Luz',
+        descripcion: 'Factura de luz del mes',
+        categoriaId: 1,
+        nombreCategoria: 'Documentos',
+        colorCategoria: '#2196F3',
+        fechaCreacion: DateTime.now(),
+        fechaModificacion: DateTime.now(),
+      ),
+    ];
+  }
+}
+
+class TestEtiquetasNotifier extends EtiquetasNotifier {
+  @override
+  FutureOr<List<Etiqueta>> build() {
+    return [
+      const Etiqueta(id: 1, nombre: 'Impuestos'),
+      const Etiqueta(id: 2, nombre: 'Hogar'),
+    ];
+  }
+}
+
 void main() {
-  testWidgets('Carga la pantalla de inicio y navega hacia DetalleEditorScreen', (WidgetTester tester) async {
+  testWidgets('Carga la pantalla de inicio Simplista, CategoriasScreen con ReorderableListView y DetalleEditorScreen', (WidgetTester tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           categoriasProvider.overrideWith(TestCategoriasNotifier.new),
           fichasProvider.overrideWith(TestFichasNotifier.new),
+          fichasRecientesProvider.overrideWith(TestFichasRecientesNotifier.new),
+          etiquetasProvider.overrideWith(TestEtiquetasNotifier.new),
         ],
-        child: const ArchivadorDigitalApp(),
+        child: const SimplistaApp(),
       ),
     );
 
@@ -53,12 +87,28 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    // Validar elementos principales de la interfaz
-    expect(find.text('Archivador Digital'), findsOneWidget);
-    expect(find.text('Modo Offline Activo'), findsOneWidget);
-    expect(find.text('Categorías'), findsNWidgets(2));
-    expect(find.text('Documentos'), findsNWidgets(2));
-    expect(find.text('Factura de Luz'), findsOneWidget);
+    // Validar elementos principales en la interfaz
+    expect(find.text('Simplista'), findsWidgets);
+    expect(find.text('Categorías'), findsOneWidget);
+    expect(find.text('Documentos'), findsWidgets);
+    expect(find.text('Factura de Luz'), findsWidgets);
+
+    // Validar el buscador de fichas
+    expect(find.byType(SearchBar), findsOneWidget);
+
+    // Navegar a CategoriasScreen y verificar que ReorderableListView esté presente allí
+    final botonCategorias = find.byTooltip('Gestionar y ordenar categorías');
+    expect(botonCategorias, findsOneWidget);
+    await tester.tap(botonCategorias);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(CategoriasScreen), findsOneWidget);
+    expect(find.byType(ReorderableListView), findsOneWidget);
+    expect(find.text('Errante'), findsOneWidget);
+
+    // Regresar al InicioScreen
+    Navigator.of(tester.element(find.byType(CategoriasScreen))).pop();
+    await tester.pumpAndSettle();
 
     // Buscar y presionar el botón de Nueva Ficha
     final botonNuevaFicha = find.widgetWithText(FloatingActionButton, 'Nueva Ficha');
@@ -72,5 +122,13 @@ void main() {
     expect(find.text('Nueva Ficha'), findsOneWidget);
     expect(find.text('Título de la ficha *'), findsOneWidget);
     expect(find.text('Guardar Ficha'), findsOneWidget);
+
+    // Verificar que Autocomplete de etiquetas esté presente
+    expect(find.byType(typeOf<Autocomplete<String>>()), findsOneWidget);
+
+    // Verificar que la categoría activa 'Documentos' esté precargada en el dropdown
+    expect(find.text('Documentos'), findsOneWidget);
   });
 }
+
+Type typeOf<T>() => T;

@@ -17,17 +17,31 @@ class FichaRepository {
   Future<Database> get _db async => await _dbProvider.database;
 
   /// Obtiene todas las fichas con sus datos de categoría y lista de etiquetas.
-  Future<List<Ficha>> obtenerTodas({int? categoriaId, String? busqueda}) async {
+  /// Soporta filtrado por [categoriaId], [busqueda] de texto y [etiquetaNombre].
+  Future<List<Ficha>> obtenerTodas({
+    int? categoriaId,
+    String? busqueda,
+    String? etiquetaNombre,
+  }) async {
     final db = await _db;
 
     String query = '''
-      SELECT f.*, c.nombre AS nombre_categoria, c.color_hex AS color_categoria
+      SELECT DISTINCT f.*, c.nombre AS nombre_categoria, c.color_hex AS color_categoria
       FROM ${AppDatabase.tablaFichas} f
       LEFT JOIN ${AppDatabase.tablaCategorias} c ON f.categoria_id = c.id
     ''';
 
     List<dynamic> args = [];
     List<String> condiciones = [];
+
+    if (etiquetaNombre != null && etiquetaNombre.trim().isNotEmpty) {
+      query += '''
+        INNER JOIN ${AppDatabase.tablaRelaciones} r ON f.id = r.ficha_id
+        INNER JOIN ${AppDatabase.tablaEtiquetas} e ON r.etiqueta_id = e.id
+      ''';
+      condiciones.add('LOWER(e.nombre) = LOWER(?)');
+      args.add(etiquetaNombre.trim());
+    }
 
     if (categoriaId != null) {
       condiciones.add('f.categoria_id = ?');
@@ -55,6 +69,27 @@ class FichaRepository {
       fichas.add(Ficha.fromMap(fila, etiquetas: etiquetas));
     }
 
+    return fichas;
+  }
+
+  /// Obtiene las N fichas más recientes sin filtros para el carrusel de inicio.
+  Future<List<Ficha>> obtenerRecientes({int limite = 5}) async {
+    final db = await _db;
+    final query = '''
+      SELECT f.*, c.nombre AS nombre_categoria, c.color_hex AS color_categoria
+      FROM ${AppDatabase.tablaFichas} f
+      LEFT JOIN ${AppDatabase.tablaCategorias} c ON f.categoria_id = c.id
+      ORDER BY f.fecha_modificacion DESC
+      LIMIT ?
+    ''';
+    final filas = await db.rawQuery(query, [limite]);
+
+    List<Ficha> fichas = [];
+    for (var fila in filas) {
+      final fichaId = fila['id'] as int;
+      final etiquetas = await _etiquetaRepo.obtenerPorFichaId(fichaId);
+      fichas.add(Ficha.fromMap(fila, etiquetas: etiquetas));
+    }
     return fichas;
   }
 
