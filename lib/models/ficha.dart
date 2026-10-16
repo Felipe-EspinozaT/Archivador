@@ -1,4 +1,5 @@
 import 'etiqueta.dart';
+import 'bloque_contenido.dart';
 
 /// Modelo de datos que representa una Ficha del archivador visual.
 class Ficha {
@@ -12,6 +13,9 @@ class Ficha {
   final DateTime fechaModificacion;
   final String? rutaImagen;
   final List<Etiqueta> etiquetas;
+
+  /// Retorna una descripción limpia sin metadatos internos para vista rápida en tarjetas.
+  String get descripcionLimpia => BloquesContenidoHelper.obtenerResumenTexto(descripcion);
 
   const Ficha({
     this.id,

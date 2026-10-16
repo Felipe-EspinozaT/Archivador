@@ -119,12 +119,12 @@ void main() {
 
     // Verificar que navegamos a DetalleEditorScreen
     expect(find.byType(DetalleEditorScreen), findsOneWidget);
-    expect(find.text('Nueva Ficha'), findsOneWidget);
-    expect(find.text('Título de la ficha *'), findsOneWidget);
-    expect(find.text('Guardar Ficha'), findsOneWidget);
+    expect(find.text('Título de la ficha...'), findsOneWidget);
+    expect(find.text('Guardar'), findsOneWidget);
 
-    // Verificar que Autocomplete de etiquetas esté presente
-    expect(find.byType(typeOf<Autocomplete<String>>()), findsOneWidget);
+    // Verificar que el botón de modal de Etiquetas esté presente en la barra superior
+    expect(find.text('Etiquetas'), findsOneWidget);
+    expect(find.text('+ Contenido'), findsOneWidget);
 
     // Verificar que la categoría activa 'Documentos' esté precargada en el dropdown
     expect(find.text('Documentos'), findsOneWidget);

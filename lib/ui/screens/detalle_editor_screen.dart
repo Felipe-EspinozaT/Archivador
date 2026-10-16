@@ -4,12 +4,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../models/ficha.dart';
+import '../../models/bloque_contenido.dart';
 import '../../providers/categorias_provider.dart';
 import '../../providers/fichas_provider.dart';
 import '../../providers/etiquetas_provider.dart';
+import '../../providers/database_provider.dart';
+import '../../services/storage_service.dart';
 import '../widgets/etiqueta_chip.dart';
+import '../widgets/recorte_imagen_modal.dart';
+import '../widgets/renderizador_formula_matematica.dart';
 
-/// Pantalla para crear, visualizar y editar una ficha del archivador.
+/// Pantalla con estética de 'Diario de Campo / Bitácora' para visualizar, crear y editar fichas.
 class DetalleEditorScreen extends ConsumerStatefulWidget {
   final Ficha? ficha;
   final int? categoriaIdInicial;
@@ -27,7 +32,7 @@ class DetalleEditorScreen extends ConsumerStatefulWidget {
 class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _tituloController;
-  late TextEditingController _descripcionController;
+  late TextEditingController _textoPrincipalController;
 
   int? _categoriaIdSeleccionada;
   File? _nuevaImagenArchivo;
@@ -37,35 +42,65 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
   final ImagePicker _picker = ImagePicker();
   bool _guardando = false;
 
+  // Lista dinámica y persistente de bloques modulares de la bitácora
+  final List<BloqueContenido> _bloques = [];
+  final Map<String, TextEditingController> _controladoresNotasBloques = {};
+  DateTime? _fechaBitacora;
+
   bool get _esEdicion => widget.ficha != null;
 
   @override
   void initState() {
     super.initState();
     _tituloController = TextEditingController(text: widget.ficha?.titulo ?? '');
-    _descripcionController = TextEditingController(text: widget.ficha?.descripcion ?? '');
+
+    // Desempaquetar contenido previo
+    final contenidoDesempaquetado = BloquesContenidoHelper.desempaquetar(widget.ficha?.descripcion);
+    _textoPrincipalController = TextEditingController(text: contenidoDesempaquetado.notaPrincipal);
+
+    _bloques.addAll(contenidoDesempaquetado.bloques);
+    for (final b in _bloques) {
+      if (b.tipo == TipoBloqueContenido.nota || b.tipo == TipoBloqueContenido.formula) {
+        _controladoresNotasBloques[b.id] = TextEditingController(text: b.valor);
+      } else if (b.tipo == TipoBloqueContenido.fecha) {
+        _controladoresNotasBloques[b.id] = TextEditingController(text: b.subtitulo ?? '');
+      }
+    }
 
     _categoriaIdSeleccionada = widget.ficha?.categoriaId ?? widget.categoriaIdInicial;
     _rutaImagenExistente = widget.ficha?.rutaImagen;
     _etiquetas = widget.ficha?.etiquetas.map((e) => e.nombre).toList() ?? [];
+    _fechaBitacora = widget.ficha?.fechaCreacion ?? DateTime.now();
   }
 
   @override
   void dispose() {
     _tituloController.dispose();
-    _descripcionController.dispose();
+    _textoPrincipalController.dispose();
+    for (final c in _controladoresNotasBloques.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
-  Future<void> _seleccionarImagen(ImageSource origen) async {
+  // Permite seleccionar la imagen principal y elegir su ajuste/proporción con recorte interactivo
+  Future<void> _seleccionarImagenPrincipal(ImageSource origen) async {
     try {
       final picked = await _picker.pickImage(source: origen, imageQuality: 85);
-      if (picked != null) {
-        setState(() {
-          _nuevaImagenArchivo = File(picked.path);
-          _rutaImagenExistente = picked.path;
-          _eliminarImagenPrevia = false;
-        });
+      if (picked != null && mounted) {
+        final archivoRecortado = await RecorteImagenModal.mostrar(
+          context,
+          archivoImagen: File(picked.path),
+          aspectoObjetivo: 2.0, // Formato panorámico/portada 1x2 por defecto
+        );
+
+        if (archivoRecortado != null && mounted) {
+          setState(() {
+            _nuevaImagenArchivo = archivoRecortado;
+            _rutaImagenExistente = archivoRecortado.path;
+            _eliminarImagenPrevia = false;
+          });
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -76,7 +111,42 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
     }
   }
 
-  void _removerImagen() {
+  // Agrega una imagen anexa a la bitácora con recorte interactivo (1:1 o 1x2)
+  Future<void> _agregarImagenAnexa(ImageSource origen, {required double proporcionAncho}) async {
+    try {
+      final picked = await _picker.pickImage(source: origen, imageQuality: 85);
+      if (picked != null && mounted) {
+        final aspectoRecorte = proporcionAncho < 0.9 ? 1.0 : 2.0;
+        final archivoRecortado = await RecorteImagenModal.mostrar(
+          context,
+          archivoImagen: File(picked.path),
+          aspectoObjetivo: aspectoRecorte,
+        );
+
+        if (archivoRecortado != null && mounted) {
+          final id = 'img_${DateTime.now().millisecondsSinceEpoch}_${_bloques.length}';
+          setState(() {
+            _bloques.add(
+              BloqueContenido(
+                id: id,
+                tipo: TipoBloqueContenido.imagen,
+                valor: archivoRecortado.path,
+                proporcionAncho: proporcionAncho,
+              ),
+            );
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al adjuntar imagen: $e')),
+        );
+      }
+    }
+  }
+
+  void _removerImagenPrincipal() {
     setState(() {
       _nuevaImagenArchivo = null;
       _rutaImagenExistente = null;
@@ -84,10 +154,419 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
     });
   }
 
+  void _agregarBloqueNota({double proporcionAncho = 0.5}) {
+    final id = 'nota_${DateTime.now().millisecondsSinceEpoch}_${_bloques.length}';
+    final controller = TextEditingController();
+    _controladoresNotasBloques[id] = controller;
+
+    setState(() {
+      _bloques.add(
+        BloqueContenido(
+          id: id,
+          tipo: TipoBloqueContenido.nota,
+          valor: '',
+          proporcionAncho: proporcionAncho,
+        ),
+      );
+    });
+  }
+
+  void _agregarBloqueFormula() {
+    final id = 'form_${DateTime.now().millisecondsSinceEpoch}_${_bloques.length}';
+    final controller = TextEditingController();
+    _controladoresNotasBloques[id] = controller;
+
+    setState(() {
+      _bloques.add(
+        BloqueContenido(
+          id: id,
+          tipo: TipoBloqueContenido.formula,
+          valor: '',
+          proporcionAncho: 1.0,
+        ),
+      );
+    });
+  }
+
+  void _agregarBloqueFecha() async {
+    final seleccionada = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: Color(0xFF825385),
+              onPrimary: Colors.white,
+              onSurface: Colors.black87,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (seleccionada != null && mounted) {
+      final id = 'fecha_${DateTime.now().millisecondsSinceEpoch}_${_bloques.length}';
+      final controller = TextEditingController();
+      _controladoresNotasBloques[id] = controller;
+
+      setState(() {
+        _bloques.add(
+          BloqueContenido(
+            id: id,
+            tipo: TipoBloqueContenido.fecha,
+            valor: '${seleccionada.day}/${seleccionada.month}/${seleccionada.year}',
+            proporcionAncho: 0.5,
+          ),
+        );
+      });
+    }
+  }
+
+  void _eliminarBloque(int index) {
+    final b = _bloques[index];
+    if (_controladoresNotasBloques.containsKey(b.id)) {
+      _controladoresNotasBloques[b.id]?.dispose();
+      _controladoresNotasBloques.remove(b.id);
+    }
+    setState(() {
+      _bloques.removeAt(index);
+    });
+  }
+
+  void _alternarProporcionBloque(int index) {
+    setState(() {
+      final actual = _bloques[index];
+      // Alterna entre ancho medio (0.5 - cuadrado) y ancho completo (1.0 - rectangular 1x2)
+      final nuevoAncho = actual.proporcionAncho >= 0.9 ? 0.5 : 1.0;
+      _bloques[index] = actual.copyWith(proporcionAncho: nuevoAncho);
+    });
+  }
+
+  void _cambiarModoIncrustacion(int index) {
+    setState(() {
+      final actual = _bloques[index];
+      ModoIncrustacion nuevoModo;
+      switch (actual.modoIncrustacion) {
+        case ModoIncrustacion.arribaAbajo:
+          nuevoModo = ModoIncrustacion.alinearDerecha;
+          break;
+        case ModoIncrustacion.alinearDerecha:
+          nuevoModo = ModoIncrustacion.alinearIzquierda;
+          break;
+        case ModoIncrustacion.alinearIzquierda:
+          nuevoModo = ModoIncrustacion.arribaAbajo;
+          break;
+      }
+      _bloques[index] = actual.copyWith(modoIncrustacion: nuevoModo);
+    });
+  }
+
+  // Modal para agregar contenido: Nota, Imagen anexa, Fórmula, Fecha con texto
+  void _mostrarSelectorNuevoContenido() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.add_circle_outline, color: Color(0xFF825385)),
+                    SizedBox(width: 8),
+                    Text(
+                      'Incrustar contenido a la bitácora',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF2C2C2C),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Colors.amber.shade100,
+                    child: const Icon(Icons.sticky_note_2_outlined, color: Colors.orange),
+                  ),
+                  title: const Text('Nota o Apunte incrustado', style: TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: const Text('Bloque de texto compacto o ancho completo'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _agregarBloqueNota(proporcionAncho: 0.5);
+                  },
+                ),
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Colors.purple.shade100,
+                    child: const Icon(Icons.image_outlined, color: Color(0xFF825385)),
+                  ),
+                  title: const Text('Imagen anexa', style: TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: const Text('Foto con ajuste de recorte (1:1 o 1x2) estilo Word'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _mostrarOpcionesImagenAnexa();
+                  },
+                ),
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Colors.blue.shade100,
+                    child: const Icon(Icons.functions, color: Colors.blue),
+                  ),
+                  title: const Text('Fórmula matemática de Ingeniería', style: TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: const Text('Fracciones apiladas, sumatorias, derivadas, símbolos'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _agregarBloqueFormula();
+                  },
+                ),
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Colors.teal.shade100,
+                    child: const Icon(Icons.event_note, color: Colors.teal),
+                  ),
+                  title: const Text('Fecha / Hito con texto opcional', style: TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: const Text('Sello de fecha con apunte breve para bitácoras'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _agregarBloqueFecha();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _mostrarOpcionesImagenAnexa() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Wrap(
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+                child: Text(
+                  'Elige el formato de la imagen anexa',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.crop_square, color: Color(0xFF825385)),
+                title: const Text('Cuadrada (1:1)'),
+                subtitle: const Text('Ocupa medio ancho en el diario de campo'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _agregarImagenAnexa(ImageSource.gallery, proporcionAncho: 0.5);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.crop_16_9, color: Color(0xFF825385)),
+                title: const Text('Rectangular (Máx 1x2 ancho completo)'),
+                subtitle: const Text('Ocupa todo el ancho en el diario'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _agregarImagenAnexa(ImageSource.gallery, proporcionAncho: 1.0);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // Modal para gestionar etiquetas
+  void _mostrarModalEtiquetas() {
+    final controllerTag = TextEditingController();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final todasEtiquetas = ref.watch(etiquetasProvider).value ?? [];
+
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                20,
+                20,
+                MediaQuery.of(context).viewInsets.bottom + 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.label_outline, color: Color(0xFF825385)),
+                          SizedBox(width: 8),
+                          Text(
+                            'Etiquetas de la Ficha',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: controllerTag,
+                          decoration: InputDecoration(
+                            hintText: 'Nueva etiqueta (ej. Facturas, Auto)',
+                            isDense: true,
+                            filled: true,
+                            fillColor: Colors.grey.shade100,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide.none,
+                            ),
+                          ),
+                          onSubmitted: (t) {
+                            final limpio = t.trim();
+                            if (limpio.isNotEmpty && !_etiquetas.contains(limpio)) {
+                              setState(() => _etiquetas.add(limpio));
+                              setModalState(() {});
+                              controllerTag.clear();
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filled(
+                        style: IconButton.styleFrom(backgroundColor: const Color(0xFF825385)),
+                        onPressed: () {
+                          final limpio = controllerTag.text.trim();
+                          if (limpio.isNotEmpty && !_etiquetas.contains(limpio)) {
+                            setState(() => _etiquetas.add(limpio));
+                            setModalState(() {});
+                            controllerTag.clear();
+                          }
+                        },
+                        icon: const Icon(Icons.add),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('Asignadas:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  const SizedBox(height: 8),
+                  if (_etiquetas.isNotEmpty)
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _etiquetas.map((tag) {
+                        return EtiquetaChip(
+                          texto: tag,
+                          alEliminar: () {
+                            setState(() => _etiquetas.remove(tag));
+                            setModalState(() {});
+                          },
+                        );
+                      }).toList(),
+                    )
+                  else
+                    const Text('No hay etiquetas asignadas a esta ficha.', style: TextStyle(color: Colors.black45)),
+                  const SizedBox(height: 16),
+                  if (todasEtiquetas.isNotEmpty) ...[
+                    const Text('Sugerencias existentes:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: todasEtiquetas
+                          .where((e) => !_etiquetas.contains(e.nombre))
+                          .map((e) {
+                        return ActionChip(
+                          label: Text(e.nombre),
+                          onPressed: () {
+                            setState(() => _etiquetas.add(e.nombre));
+                            setModalState(() {});
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF825385)),
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Listo'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _seleccionarFechaBitacora() async {
+    final seleccionada = await showDatePicker(
+      context: context,
+      initialDate: _fechaBitacora ?? DateTime.now(),
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: Color(0xFF825385),
+              onPrimary: Colors.white,
+              onSurface: Colors.black87,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (seleccionada != null) {
+      setState(() {
+        _fechaBitacora = seleccionada;
+      });
+    }
+  }
+
   Future<void> _guardar() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // Si es edición de una ficha existente, pedir confirmación antes de modificar
     if (_esEdicion) {
       final confirmar = await showDialog<bool>(
         context: context,
@@ -102,6 +581,7 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
               child: const Text('Cancelar'),
             ),
             FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF825385)),
               onPressed: () => Navigator.pop(ctx, true),
               child: const Text('Guardar cambios'),
             ),
@@ -115,12 +595,51 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
 
     try {
       final notifier = ref.read(fichasProvider.notifier);
+      final storageService = ref.read(storageServiceProvider);
+
+      // 1. Guardar imágenes anexas nuevas al almacenamiento interno persistente
+      final List<BloqueContenido> bloquesFinales = [];
+      for (final b in _bloques) {
+        if (b.tipo == TipoBloqueContenido.imagen) {
+          String rutaPersistida = b.valor;
+          if (!kIsWeb && File(b.valor).existsSync()) {
+            final esCarpetaApp = b.valor.contains('imagenes');
+            if (!esCarpetaApp) {
+              rutaPersistida = await storageService.guardarImagen(File(b.valor));
+            }
+          }
+          bloquesFinales.add(b.copyWith(valor: rutaPersistida));
+        } else if (b.tipo == TipoBloqueContenido.formula) {
+          String valorFormula = _controladoresNotasBloques[b.id]?.text.trim() ?? b.valor;
+          if (valorFormula.startsWith(RenderizadorFormulaMatematica.prefijoImagenFormula)) {
+            final rutaImg = valorFormula.substring(RenderizadorFormulaMatematica.prefijoImagenFormula.length).trim();
+            if (!kIsWeb && File(rutaImg).existsSync() && !rutaImg.contains('imagenes')) {
+              final nuevaRuta = await storageService.guardarImagen(File(rutaImg));
+              valorFormula = '${RenderizadorFormulaMatematica.prefijoImagenFormula}$nuevaRuta';
+            }
+          }
+          bloquesFinales.add(b.copyWith(valor: valorFormula));
+        } else if (b.tipo == TipoBloqueContenido.nota) {
+          final valorActual = _controladoresNotasBloques[b.id]?.text.trim() ?? b.valor;
+          bloquesFinales.add(b.copyWith(valor: valorActual));
+        } else if (b.tipo == TipoBloqueContenido.fecha) {
+          final textoHito = _controladoresNotasBloques[b.id]?.text.trim() ?? b.subtitulo;
+          bloquesFinales.add(b.copyWith(subtitulo: textoHito));
+        }
+      }
+
+      // 2. Empaquetar todo el contenido modular en formato persistente
+      final textoPrincipal = _textoPrincipalController.text.trim();
+      final descripcionSerializada = BloquesContenidoHelper.empaquetar(
+        textoPrincipal,
+        bloquesFinales,
+      );
 
       if (_esEdicion) {
         await notifier.actualizarFicha(
           fichaExistente: widget.ficha!,
           nuevoTitulo: _tituloController.text.trim(),
-          nuevaDescripcion: _descripcionController.text.trim(),
+          nuevaDescripcion: descripcionSerializada,
           nuevaCategoriaId: _categoriaIdSeleccionada,
           nuevaImagenArchivo: _nuevaImagenArchivo,
           eliminarImagenPrevia: _eliminarImagenPrevia,
@@ -129,29 +648,20 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
       } else {
         await notifier.guardarFicha(
           titulo: _tituloController.text.trim(),
-          descripcion: _descripcionController.text.trim(),
+          descripcion: descripcionSerializada,
           categoriaId: _categoriaIdSeleccionada,
           archivoImagen: _nuevaImagenArchivo,
           etiquetas: _etiquetas,
         );
       }
 
-      // Invalidar etiquetasProvider para reflejar nuevas etiquetas creadas
-      ref.invalidate(etiquetasProvider);
-
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_esEdicion ? 'Ficha actualizada con éxito' : 'Ficha guardada con éxito'),
-            backgroundColor: Colors.green.shade700,
-          ),
-        );
         Navigator.pop(context);
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al guardar: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Error al guardar: $e')),
         );
       }
     } finally {
@@ -164,7 +674,7 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Eliminar Ficha'),
-        content: const Text('¿Estás seguro de que deseas eliminar esta ficha y su imagen asociada? Esta acción no se puede deshacer.'),
+        content: Text('¿Seguro que deseas eliminar permanentemente "${widget.ficha!.titulo}"?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -194,311 +704,799 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
   Widget build(BuildContext context) {
     final categoriasAsync = ref.watch(categoriasProvider);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_esEdicion ? 'Editar Ficha' : 'Nueva Ficha'),
-        actions: [
-          if (_esEdicion)
-            IconButton(
-              icon: const Icon(Icons.delete_outline, color: Colors.red),
-              tooltip: 'Eliminar Ficha',
-              onPressed: _guardando ? null : _confirmarEliminacion,
-            ),
-          IconButton(
-            icon: const Icon(Icons.check),
-            tooltip: 'Guardar',
-            onPressed: _guardando ? null : _guardar,
-          ),
-        ],
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xFF825385),
+            Color(0xFFEF9810),
+          ],
+        ),
       ),
-      body: _guardando
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16.0),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: _guardando
+            ? const Center(child: CircularProgressIndicator(color: Colors.white))
+            : SafeArea(
+                child: Stack(
                   children: [
-                    // --- SECCIÓN DE IMAGEN ---
-                    _construirSeccionImagen(),
-                    const SizedBox(height: 20),
-
-                    // --- CAMPO TÍTULO ---
-                    TextFormField(
-                      controller: _tituloController,
-                      decoration: const InputDecoration(
-                        labelText: 'Título de la ficha *',
-                        hintText: 'Ej. Factura de Internet Enero',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.title),
-                      ),
-                      validator: (valor) {
-                        if (valor == null || valor.trim().isEmpty) {
-                          return 'Por favor ingresa un título';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-
-                    // --- SELECCIÓN DE CATEGORÍA ---
-                    categoriasAsync.when(
-                      data: (categorias) {
-                        final existeSeleccion = categorias.any((c) => c.id == _categoriaIdSeleccionada);
-                        final valorSeguro = existeSeleccion ? _categoriaIdSeleccionada : null;
-
-                        return DropdownButtonFormField<int?>(
-                          initialValue: valorSeguro,
-                          decoration: const InputDecoration(
-                            labelText: 'Categoría',
-                            border: OutlineInputBorder(),
-                            prefixIcon: Icon(Icons.folder_outlined),
-                          ),
-                          hint: const Text('Errante (Por defecto)'),
-                          items: [
-                            const DropdownMenuItem<int?>(
-                              value: null,
-                              child: Text('Sin asignar (irá a Errante)'),
-                            ),
-                            ...categorias.map(
-                              (c) => DropdownMenuItem<int?>(
-                                value: c.id,
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 12,
-                                      height: 12,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: _colorDesdeHex(c.colorHex),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(c.nombre),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                          onChanged: (nuevoId) {
-                            setState(() => _categoriaIdSeleccionada = nuevoId);
-                          },
-                        );
-                      },
-                      loading: () => const LinearProgressIndicator(),
-                      error: (err, _) => Text('Error al cargar categorías: $err'),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // --- CAMPO DESCRIPCIÓN ---
-                    TextFormField(
-                      controller: _descripcionController,
-                      maxLines: 3,
-                      decoration: const InputDecoration(
-                        labelText: 'Descripción o notas adicionales',
-                        hintText: 'Detalles relevantes de esta ficha...',
-                        border: OutlineInputBorder(),
-                        alignLabelWithHint: true,
-                        prefixIcon: Icon(Icons.notes),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-
-                    // --- SECCIÓN DE ETIQUETAS CON AUTOCOMPLETADO ---
-                    const Text(
-                      'Etiquetas',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    Autocomplete<String>(
-                      optionsBuilder: (TextEditingValue textEditingValue) {
-                        final texto = textEditingValue.text.trim();
-                        if (texto.isEmpty) {
-                          return const Iterable<String>.empty();
-                        }
-                        final query = texto.toLowerCase();
-                        final todas = ref.watch(etiquetasProvider).value ?? [];
-                        return todas
-                            .map((e) => e.nombre)
-                            .where((nombre) =>
-                                nombre.toLowerCase().contains(query) && !_etiquetas.contains(nombre));
-                      },
-                      onSelected: (String seleccion) {
-                        if (!_etiquetas.contains(seleccion)) {
-                          setState(() {
-                            _etiquetas.add(seleccion);
-                          });
-                        }
-                      },
-                      fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-                        return Row(
+                    // CONTENIDO PRINCIPAL SCROLLEABLE TIPO DIARIO DE CAMPO
+                    SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(16, 44, 16, 32),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Expanded(
-                              child: TextField(
-                                controller: controller,
-                                focusNode: focusNode,
-                                decoration: const InputDecoration(
-                                  hintText: 'Añadir etiqueta (ej. Impuestos, Auto)',
-                                  isDense: true,
-                                  border: OutlineInputBorder(),
-                                  prefixIcon: Icon(Icons.label_outline, size: 20),
+                            // 1. FOTO DE PORTADA PRINCIPAL (OPCIONAL)
+                            _construirSeccionImagenPortada(),
+                            const SizedBox(height: 8),
+
+                            // 2. ACCIONES INTEGRADAS BAJO LA IMAGEN Y ALINEADAS A LA DERECHA (NO PERENNES)
+                            _construirAccionesBajoImagen(),
+                            const SizedBox(height: 12),
+
+                            // 3. TÍTULO EN ÁREA AMPLIA Y TRANSLÚCIDA
+                            _construirCampoTitulo(),
+                            const SizedBox(height: 12),
+
+                            // 4. METADATOS: Categoría y Fecha
+                            _construirBarraMetadatos(categoriasAsync),
+                            const SizedBox(height: 12),
+
+                            // 5. ÁREA DE TEXTO PRINCIPAL (MARCO AMPLIO Y TRANSLÚCIDO)
+                            _construirCampoTextoPrincipal(),
+                            const SizedBox(height: 14),
+
+                            // 6. GRILLA FLEXIBLE DE BLOQUES MODULARES (NOTAS, IMÁGENES ANEXAS, FÓRMULAS)
+                            _construirGrillaBloquesModulares(),
+                            const SizedBox(height: 16),
+
+                            // 7. BOTÓN CENTRAL: [+ CONTENIDO]
+                            Center(
+                              child: FilledButton.tonalIcon(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: Colors.white.withValues(alpha: 0.9),
+                                  foregroundColor: const Color(0xFF825385),
+                                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                  elevation: 2,
                                 ),
-                                onSubmitted: (texto) {
-                                  final limpio = texto.trim();
-                                  if (limpio.isNotEmpty && !_etiquetas.contains(limpio)) {
-                                    setState(() {
-                                      _etiquetas.add(limpio);
-                                    });
-                                    controller.clear();
-                                  }
-                                  onFieldSubmitted();
-                                },
+                                onPressed: _mostrarSelectorNuevoContenido,
+                                icon: const Icon(Icons.add, size: 20),
+                                label: const Text(
+                                  '+ Contenido',
+                                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                                ),
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            IconButton.filled(
-                              onPressed: () {
-                                final limpio = controller.text.trim();
-                                if (limpio.isNotEmpty && !_etiquetas.contains(limpio)) {
-                                  setState(() {
-                                    _etiquetas.add(limpio);
-                                  });
-                                  controller.clear();
-                                }
-                              },
-                              icon: const Icon(Icons.add),
-                              tooltip: 'Agregar etiqueta',
-                            ),
+                            const SizedBox(height: 24),
                           ],
-                        );
-                      },
+                        ),
+                      ),
                     ),
-                    const SizedBox(height: 10),
-                    if (_etiquetas.isNotEmpty)
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: _etiquetas
-                            .map(
-                              (tag) => EtiquetaChip(
-                                texto: tag,
-                                alEliminar: () {
-                                  setState(() => _etiquetas.remove(tag));
-                                },
-                              ),
-                            )
-                            .toList(),
-                      )
-                    else
-                      Text(
-                        'Sin etiquetas asignadas.',
-                        style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-                      ),
 
-                    const SizedBox(height: 32),
-
-                    // Botón principal de Guardar
-                    FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                      ),
-                      onPressed: _guardando ? null : _guardar,
-                      icon: const Icon(Icons.save),
-                      label: Text(
-                        _esEdicion ? 'Actualizar Ficha' : 'Guardar Ficha',
-                        style: const TextStyle(fontSize: 16),
+                    // BOTÓN REGRESAR SOLO FLECHA (SIN CÍRCULO), TRANSLÚCIDO Y FLOTANTE
+                    Positioned(
+                      top: 6,
+                      left: 10,
+                      child: IconButton(
+                        icon: const Icon(
+                          Icons.arrow_back,
+                          color: Colors.white,
+                          size: 28,
+                        ),
+                        tooltip: 'Regresar',
+                        splashRadius: 24,
+                        onPressed: () => Navigator.pop(context),
                       ),
                     ),
                   ],
                 ),
               ),
-            ),
+      ),
     );
   }
 
-  Widget _construirSeccionImagen() {
+  /// Acciones debajo de la imagen principal a la derecha: [Etiquetas modal] [Eliminar] [Modificar/Guardar]
+  Widget _construirAccionesBajoImagen() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        // Botón modal de Etiquetas con badge de cantidad
+        Badge(
+          isLabelVisible: _etiquetas.isNotEmpty,
+          label: Text('${_etiquetas.length}'),
+          child: OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              side: BorderSide(color: Colors.white.withValues(alpha: 0.45)),
+              backgroundColor: Colors.black.withValues(alpha: 0.22),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            ),
+            icon: const Icon(Icons.label_outline, size: 16, color: Colors.white),
+            label: const Text('Etiquetas', style: TextStyle(fontSize: 12, color: Colors.white)),
+            onPressed: _mostrarModalEtiquetas,
+          ),
+        ),
+        const SizedBox(width: 8),
+
+        if (_esEdicion) ...[
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              side: BorderSide(color: Colors.red.shade300.withValues(alpha: 0.7)),
+              backgroundColor: Colors.red.shade900.withValues(alpha: 0.3),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            ),
+            icon: const Icon(Icons.delete_outline, size: 16, color: Colors.white),
+            label: const Text('Eliminar', style: TextStyle(fontSize: 12, color: Colors.white)),
+            onPressed: _guardando ? null : _confirmarEliminacion,
+          ),
+          const SizedBox(width: 8),
+        ],
+
+        FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: Colors.white.withValues(alpha: 0.95),
+            foregroundColor: const Color(0xFF825385),
+            elevation: 2,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          ),
+          icon: const Icon(Icons.check, size: 16),
+          label: Text(
+            _esEdicion ? 'Modificar' : 'Guardar',
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+          ),
+          onPressed: _guardando ? null : _guardar,
+        ),
+      ],
+    );
+  }
+
+  Widget _construirCampoTitulo() {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: Colors.white.withValues(alpha: 0.88),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      child: Column(
-        children: [
-          ClipRRect(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-            child: SizedBox(
-              height: 200,
-              width: double.infinity,
-              child: _construirContenidoImagen(),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: _BotonesImagen(
-              nuevaImagenArchivo: _nuevaImagenArchivo,
-              rutaImagenExistente: _rutaImagenExistente,
-              onCamara: () => _seleccionarImagen(ImageSource.camera),
-              onGaleria: () => _seleccionarImagen(ImageSource.gallery),
-              onQuitar: _removerImagen,
-            ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: TextFormField(
+        controller: _tituloController,
+        style: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          color: Color(0xFF2C2C2C),
+        ),
+        decoration: const InputDecoration(
+          hintText: 'Título de la ficha...',
+          hintStyle: TextStyle(color: Colors.black38, fontWeight: FontWeight.normal),
+          border: InputBorder.none,
+          icon: Icon(Icons.edit_note, color: Color(0xFF825385)),
+        ),
+        validator: (valor) {
+          if (valor == null || valor.trim().isEmpty) {
+            return 'Por favor ingresa un título';
+          }
+          return null;
+        },
+      ),
     );
   }
 
-  Widget _construirContenidoImagen() {
-    // 1. Nueva imagen recién seleccionada (archivo en caché temporal)
-    if (_nuevaImagenArchivo != null) {
-      return Image.file(_nuevaImagenArchivo!, fit: BoxFit.cover);
+  Widget _construirBarraMetadatos(AsyncValue<List<dynamic>> categoriasAsync) {
+    return Row(
+      children: [
+        Expanded(
+          flex: 3,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.85),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: categoriasAsync.when(
+              data: (categorias) {
+                final existeSeleccion =
+                    categorias.any((c) => c.id == _categoriaIdSeleccionada);
+                final valorSeguro = existeSeleccion ? _categoriaIdSeleccionada : null;
+
+                return DropdownButtonHideUnderline(
+                  child: DropdownButton<int?>(
+                    value: valorSeguro,
+                    isExpanded: true,
+                    hint: const Text(
+                      'Errante (General)',
+                      style: TextStyle(fontSize: 13, color: Colors.black54),
+                    ),
+                    items: [
+                      const DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text(
+                          'Errante (Por defecto)',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                      ),
+                      ...categorias.map(
+                        (c) => DropdownMenuItem<int?>(
+                          value: c.id,
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 10,
+                                height: 10,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: _colorDesdeHex(c.colorHex),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  c.nombre,
+                                  style: const TextStyle(fontSize: 13),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                    onChanged: (nuevoId) {
+                      setState(() => _categoriaIdSeleccionada = nuevoId);
+                    },
+                  ),
+                );
+              },
+              loading: () => const SizedBox(height: 36, child: LinearProgressIndicator()),
+              error: (err, _) => Text('Error: $err', style: const TextStyle(fontSize: 12)),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 2,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: _seleccionarFechaBitacora,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.85),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.event_outlined, size: 16, color: Color(0xFF825385)),
+                  const SizedBox(width: 6),
+                  Text(
+                    _fechaBitacora != null
+                        ? '${_fechaBitacora!.day}/${_fechaBitacora!.month}/${_fechaBitacora!.year}'
+                        : 'Fecha',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _construirCampoTextoPrincipal() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.88),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: TextFormField(
+        controller: _textoPrincipalController,
+        maxLines: null,
+        minLines: 3,
+        style: const TextStyle(fontSize: 14, height: 1.45, color: Colors.black87),
+        decoration: const InputDecoration(
+          hintText: 'Texto principal o resumen de la ficha...',
+          hintStyle: TextStyle(color: Colors.black38),
+          border: InputBorder.none,
+        ),
+      ),
+    );
+  }
+
+  /// Construye la grilla de bloques (Notas, Imágenes anexas, Fórmulas) que fluyen juntos
+  Widget _construirGrillaBloquesModulares() {
+    if (_bloques.isEmpty) {
+      return const SizedBox.shrink();
     }
 
-    // 2. Sin ninguna ruta
-    if (_rutaImagenExistente == null || _rutaImagenExistente!.isEmpty) {
-      return _placeholderSinImagen();
-    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final totalWidth = constraints.maxWidth;
+        final halfWidth = (totalWidth - 10) / 2;
 
-    // 3. En Web: cargar por URL/path de red
-    if (kIsWeb) {
-      return Image.network(
-        _rutaImagenExistente!,
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => _placeholderSinImagen(),
-      );
-    }
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: _bloques.asMap().entries.map((entry) {
+            final idx = entry.key;
+            final bloque = entry.value;
+            final esMitad = bloque.proporcionAncho < 0.9;
+            final itemWidth = esMitad ? halfWidth : totalWidth;
 
-    // 4. En Android/Desktop: verificar si el archivo existe de forma asíncrona
-    return FutureBuilder<bool>(
-      future: File(_rutaImagenExistente!).exists(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.data == true) {
-          return Image.file(
-            File(_rutaImagenExistente!),
-            fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => _placeholderSinImagen(),
-          );
-        }
-        return _placeholderSinImagen();
+            return SizedBox(
+              key: ValueKey(bloque.id),
+              width: itemWidth,
+              child: _construirWidgetBloque(bloque, idx, itemWidth),
+            );
+          }).toList(),
+        );
       },
     );
   }
 
+  Future<void> _pegarImagenEnFormula(TextEditingController? controller) async {
+    if (controller == null) return;
+    final XFile? picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (picked == null || !mounted) return;
 
-  Widget _placeholderSinImagen() {
-    return Center(
+    String rutaFinal = picked.path;
+    if (!kIsWeb) {
+      final File? archivoRecortado = await RecorteImagenModal.mostrar(
+        context,
+        archivoImagen: File(picked.path),
+        aspectoObjetivo: 2.0,
+      );
+      if (archivoRecortado == null || !mounted) return;
+      rutaFinal = archivoRecortado.path;
+    }
+
+    controller.text = '[[IMG_FORMULA]]:$rutaFinal';
+  }
+
+  Widget _construirWidgetBloque(BloqueContenido bloque, int index, double ancho) {
+    switch (bloque.tipo) {
+      case TipoBloqueContenido.imagen:
+        final esCuadrada = bloque.proporcionAncho < 0.9;
+        final alto = esCuadrada ? ancho : (ancho * 0.52);
+
+        return Stack(
+          children: [
+            Container(
+              height: alto,
+              width: ancho,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.6), width: 1.5),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 4),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(15),
+                child: kIsWeb
+                    ? Image.network(bloque.valor, fit: BoxFit.cover)
+                    : Image.file(File(bloque.valor), fit: BoxFit.cover, cacheWidth: 300),
+              ),
+            ),
+            // Botones de acción en la tarjeta (eliminar y alternar tamaño)
+            Positioned(
+              top: 6,
+              right: 6,
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: () => _alternarProporcionBloque(index),
+                    child: Container(
+                      decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(
+                        esCuadrada ? Icons.aspect_ratio : Icons.crop_square,
+                        size: 14,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  GestureDetector(
+                    onTap: () => _eliminarBloque(index),
+                    child: Container(
+                      decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                      padding: const EdgeInsets.all(4),
+                      child: const Icon(Icons.close, size: 14, color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+
+      case TipoBloqueContenido.nota:
+        final controller = _controladoresNotasBloques[bloque.id];
+        final esMitad = bloque.proporcionAncho < 0.9;
+
+        return Container(
+          height: esMitad ? ancho : null,
+          decoration: BoxDecoration(
+            color: Colors.amber.shade50.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.amber.shade200.withValues(alpha: 0.8)),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 4),
+            ],
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.push_pin, size: 14, color: Colors.amber.shade800),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Nota',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.amber.shade900,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      GestureDetector(
+                        onTap: () => _alternarProporcionBloque(index),
+                        child: Icon(
+                          esMitad ? Icons.aspect_ratio : Icons.crop_square,
+                          size: 15,
+                          color: Colors.black45,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      GestureDetector(
+                        onTap: () => _eliminarBloque(index),
+                        child: const Icon(Icons.close, size: 15, color: Colors.black45),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Expanded(
+                flex: esMitad ? 1 : 0,
+                child: TextFormField(
+                  controller: controller,
+                  maxLines: esMitad ? null : 3,
+                  style: const TextStyle(fontSize: 13, height: 1.35),
+                  decoration: const InputDecoration(
+                    hintText: 'Apunte...',
+                    hintStyle: TextStyle(color: Colors.black38, fontSize: 12),
+                    border: InputBorder.none,
+                    isDense: true,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+
+      case TipoBloqueContenido.formula:
+        final controller = _controladoresNotasBloques[bloque.id] ??=
+            TextEditingController(text: bloque.valor);
+
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.blue.shade200.withValues(alpha: 0.9)),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 4),
+            ],
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.functions, size: 16, color: Color(0xFF1E3A8A)),
+                      SizedBox(width: 4),
+                      Text(
+                        'Fórmula / Ecuación de Ingeniería',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A)),
+                      ),
+                    ],
+                  ),
+                  GestureDetector(
+                    onTap: () => _eliminarBloque(index),
+                    child: const Icon(Icons.close, size: 16, color: Colors.black45),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+
+              // Vista previa renderizada estilo Word en tiempo real sin reconstruir toda la pantalla
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: controller,
+                builder: (context, value, _) {
+                  final textoActual = value.text.trim();
+                  final esImagenPegada = textoActual.startsWith('[[IMG_FORMULA]]:');
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (textoActual.isNotEmpty)
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          margin: const EdgeInsets.only(bottom: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.blue.shade100),
+                          ),
+                          child: Stack(
+                            children: [
+                              RenderizadorFormulaMatematica(formula: textoActual),
+                              if (esImagenPegada)
+                                Positioned(
+                                  top: 0,
+                                  right: 0,
+                                  child: GestureDetector(
+                                    onTap: () => controller.clear(),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blue.shade50,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.blue.shade200),
+                                      ),
+                                      child: const Text(
+                                        'Cambiar a texto',
+                                        style: TextStyle(fontSize: 10, color: Color(0xFF1E3A8A), fontWeight: FontWeight.w600),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+
+                      // Si no es una imagen pegada, mostrar la caja de edición estilo ecuación de Word
+                      if (!esImagenPegada)
+                        TextFormField(
+                          controller: controller,
+                          keyboardType: TextInputType.text,
+                          textInputAction: TextInputAction.done,
+                          maxLines: 2,
+                          minLines: 1,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF1E3A8A),
+                          ),
+                          decoration: InputDecoration(
+                            hintText: 'Escribe números, variables o ecuaciones (ej. V = I * R, x/y, x^2)...',
+                            hintStyle: const TextStyle(color: Colors.black38, fontSize: 11.5),
+                            filled: true,
+                            fillColor: Colors.white.withValues(alpha: 0.85),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide(color: Colors.blue.shade200),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: Color(0xFF1E3A8A), width: 1.5),
+                            ),
+                            isDense: true,
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+
+              // Cinta de ecuaciones estilo Word (Estructuras + Símbolos + Pegar foto de fórmula)
+              TecladoSimbolosIngenieria(
+                alPegarImagenFormula: () => _pegarImagenEnFormula(controller),
+                alInsertar: (simbolo) {
+                  final sel = controller.selection;
+                  final texto = controller.text;
+                  // Si había una imagen pegada y el usuario toca una estructura/símbolo, empezar texto limpio
+                  if (texto.startsWith('[[IMG_FORMULA]]:')) {
+                    controller.text = simbolo;
+                    controller.selection = TextSelection.collapsed(offset: simbolo.length);
+                    return;
+                  }
+                  if (sel.isValid && sel.start >= 0) {
+                    final nuevoTexto = texto.replaceRange(sel.start, sel.end, simbolo);
+                    controller.value = TextEditingValue(
+                      text: nuevoTexto,
+                      selection: TextSelection.collapsed(offset: sel.start + simbolo.length),
+                    );
+                  } else {
+                    final nuevoTexto = texto + simbolo;
+                    controller.value = TextEditingValue(
+                      text: nuevoTexto,
+                      selection: TextSelection.collapsed(offset: nuevoTexto.length),
+                    );
+                  }
+                },
+              ),
+            ],
+          ),
+        );
+
+      case TipoBloqueContenido.fecha:
+        final controller = _controladoresNotasBloques[bloque.id];
+
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.teal.shade50.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.teal.shade200.withValues(alpha: 0.9)),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 4),
+            ],
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.event_available, size: 16, color: Colors.teal),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Fecha / Hito: ${bloque.valor}',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.teal),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      GestureDetector(
+                        onTap: () => _alternarProporcionBloque(index),
+                        child: const Icon(Icons.aspect_ratio, size: 15, color: Colors.black45),
+                      ),
+                      const SizedBox(width: 6),
+                      GestureDetector(
+                        onTap: () => _eliminarBloque(index),
+                        child: const Icon(Icons.close, size: 15, color: Colors.black45),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              TextFormField(
+                controller: controller,
+                maxLines: null,
+                style: const TextStyle(fontSize: 13, height: 1.35),
+                decoration: const InputDecoration(
+                  hintText: 'Texto o apunte del hito (opcional)...',
+                  hintStyle: TextStyle(color: Colors.black38, fontSize: 12),
+                  border: InputBorder.none,
+                  isDense: true,
+                ),
+              ),
+            ],
+          ),
+        );
+    }
+  }
+
+  /// Portada opcional de la ficha
+  Widget _construirSeccionImagenPortada() {
+    final tienePortada = (_nuevaImagenArchivo != null) ||
+        (_rutaImagenExistente != null && _rutaImagenExistente!.isNotEmpty);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+      ),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.add_photo_alternate_outlined, size: 54, color: Colors.grey.shade400),
-          const SizedBox(height: 8),
-          Text('No hay imagen seleccionada', style: TextStyle(color: Colors.grey.shade600)),
+          if (tienePortada)
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(17)),
+              child: SizedBox(
+                height: 180,
+                width: double.infinity,
+                child: _construirContenidoImagenPortada(),
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 8.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                TextButton.icon(
+                  style: TextButton.styleFrom(foregroundColor: Colors.white),
+                  onPressed: () => _seleccionarImagenPrincipal(ImageSource.camera),
+                  icon: const Icon(Icons.camera_alt, size: 17),
+                  label: const Text('Cámara'),
+                ),
+                TextButton.icon(
+                  style: TextButton.styleFrom(foregroundColor: Colors.white),
+                  onPressed: () => _seleccionarImagenPrincipal(ImageSource.gallery),
+                  icon: const Icon(Icons.photo_library, size: 17),
+                  label: const Text('Portada'),
+                ),
+                if (tienePortada)
+                  TextButton.icon(
+                    style: TextButton.styleFrom(foregroundColor: Colors.red.shade200),
+                    onPressed: _removerImagenPrincipal,
+                    icon: const Icon(Icons.delete_outline, size: 17),
+                    label: const Text('Quitar'),
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
+    );
+  }
+
+  Widget _construirContenidoImagenPortada() {
+    if (_nuevaImagenArchivo != null) {
+      return Image.file(_nuevaImagenArchivo!, fit: BoxFit.cover);
+    }
+    if (_rutaImagenExistente == null || _rutaImagenExistente!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    if (kIsWeb) {
+      return Image.network(_rutaImagenExistente!, fit: BoxFit.cover);
+    }
+    return FutureBuilder<bool>(
+      future: File(_rutaImagenExistente!).exists(),
+      builder: (context, snapshot) {
+        if (snapshot.data == true) {
+          return Image.file(
+            File(_rutaImagenExistente!),
+            fit: BoxFit.cover,
+            cacheWidth: 400,
+          );
+        }
+        return const SizedBox.shrink();
+      },
     );
   }
 
@@ -511,60 +1509,5 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
     } catch (_) {
       return Colors.blue;
     }
-  }
-}
-
-/// Widget de botones de imagen que determina de forma asíncrona si "Quitar" debe mostrarse.
-class _BotonesImagen extends StatelessWidget {
-  final File? nuevaImagenArchivo;
-  final String? rutaImagenExistente;
-  final VoidCallback onCamara;
-  final VoidCallback onGaleria;
-  final VoidCallback onQuitar;
-
-  const _BotonesImagen({
-    required this.nuevaImagenArchivo,
-    required this.rutaImagenExistente,
-    required this.onCamara,
-    required this.onGaleria,
-    required this.onQuitar,
-  });
-
-  Future<bool> _tieneImagen() async {
-    if (nuevaImagenArchivo != null) return true;
-    if (rutaImagenExistente == null || rutaImagenExistente!.isEmpty) return false;
-    if (kIsWeb) return true;
-    return await File(rutaImagenExistente!).exists();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<bool>(
-      future: _tieneImagen(),
-      builder: (context, snapshot) {
-        final tieneImagen = snapshot.data == true;
-        return Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            TextButton.icon(
-              onPressed: onCamara,
-              icon: const Icon(Icons.camera_alt),
-              label: const Text('Cámara'),
-            ),
-            TextButton.icon(
-              onPressed: onGaleria,
-              icon: const Icon(Icons.photo_library),
-              label: const Text('Galería'),
-            ),
-            if (tieneImagen)
-              TextButton.icon(
-                onPressed: onQuitar,
-                icon: const Icon(Icons.delete_outline, color: Colors.red),
-                label: const Text('Quitar', style: TextStyle(color: Colors.red)),
-              ),
-          ],
-        );
-      },
-    );
   }
 }

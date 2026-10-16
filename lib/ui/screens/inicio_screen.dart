@@ -8,6 +8,7 @@ import '../widgets/categoria_card.dart';
 import 'categorias_screen.dart';
 import 'lista_fichas_screen.dart';
 import 'detalle_editor_screen.dart';
+import 'backup_screen.dart';
 
 /// Pantalla principal de Simplista.
 class InicioScreen extends ConsumerStatefulWidget {
@@ -228,7 +229,13 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
               ListTile(
                 leading: const Icon(Icons.backup_outlined),
                 title: const Text('Backup'),
-                onTap: () {},
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const BackupScreen()),
+                  );
+                },
               ),
               ListTile(
                 leading: const Icon(Icons.lightbulb_outline),

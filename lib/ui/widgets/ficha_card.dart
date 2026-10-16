@@ -31,9 +31,19 @@ class FichaCard extends StatelessWidget {
     }
   }
 
+  ImageProvider? _obtenerImagenFondo(String? ruta) {
+    if (ruta == null || ruta.isEmpty) return null;
+    if (kIsWeb) {
+      return NetworkImage(ruta);
+    }
+    return FileImage(File(ruta));
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorCat = _obtenerColorCategoria(ficha.colorCategoria);
+    final tieneFondo = ficha.rutaImagen != null && ficha.rutaImagen!.isNotEmpty;
+    final imagenFondo = _obtenerImagenFondo(ficha.rutaImagen);
 
     return Card(
       elevation: 2,
@@ -45,31 +55,53 @@ class FichaCard extends StatelessWidget {
         child: Container(
           width: ancho,
           height: alto,
+          decoration: BoxDecoration(
+            color: tieneFondo ? null : Colors.white,
+            image: tieneFondo && imagenFondo != null
+                ? DecorationImage(
+                    image: imagenFondo,
+                    fit: BoxFit.cover,
+                    colorFilter: ColorFilter.mode(
+                      Colors.black.withValues(alpha: 0.48),
+                      BlendMode.darken,
+                    ),
+                  )
+                : null,
+          ),
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              CircleAvatar(
-                radius: 14,
-                backgroundColor: colorCat.withValues(alpha: 0.15),
-                child: Icon(
-                  ficha.rutaImagen != null && ficha.rutaImagen!.isNotEmpty
-                      ? Icons.image_outlined
-                      : Icons.description_outlined,
-                  color: colorCat,
-                  size: 16,
+              if (!tieneFondo)
+                CircleAvatar(
+                  radius: 13,
+                  backgroundColor: colorCat.withValues(alpha: 0.15),
+                  child: Icon(
+                    Icons.description_outlined,
+                    color: colorCat,
+                    size: 15,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
+              if (!tieneFondo) const SizedBox(height: 3),
               Text(
                 ficha.titulo,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
+                  color: tieneFondo ? Colors.white : Colors.black87,
+                  shadows: tieneFondo
+                      ? const [
+                          Shadow(
+                            blurRadius: 4,
+                            color: Colors.black87,
+                            offset: Offset(0, 1),
+                          )
+                        ]
+                      : null,
                 ),
-                maxLines: 2,
+                maxLines: tieneFondo ? 3 : 2,
                 overflow: TextOverflow.ellipsis,
               ),
             ],
@@ -148,10 +180,10 @@ class FichaDetalleCard extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    if (ficha.descripcion != null && ficha.descripcion!.isNotEmpty) ...[
+                    if (ficha.descripcionLimpia.isNotEmpty) ...[
                       const SizedBox(height: 3),
                       Text(
-                        ficha.descripcion!,
+                        ficha.descripcionLimpia,
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.grey.shade700,
@@ -202,6 +234,8 @@ class _MiniaturaFicha extends StatelessWidget {
       return Image.network(
         rutaImagen!,
         fit: BoxFit.cover,
+        cacheWidth: 150,
+        cacheHeight: 150,
         errorBuilder: (_, _, _) => _placeholder(),
       );
     }
@@ -222,6 +256,8 @@ class _MiniaturaFicha extends StatelessWidget {
           return Image.file(
             File(rutaImagen!),
             fit: BoxFit.cover,
+            cacheWidth: 150,
+            cacheHeight: 150,
             errorBuilder: (_, _, _) => _placeholder(),
           );
         }

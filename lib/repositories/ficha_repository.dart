@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 import '../core/database/app_database.dart';
 import '../models/ficha.dart';
+import '../models/etiqueta.dart';
 import 'etiqueta_repository.dart';
 
 /// Repositorio para operaciones CRUD sobre la tabla Fichas y sus Relaciones con Etiquetas.
@@ -16,7 +17,7 @@ class FichaRepository {
 
   Future<Database> get _db async => await _dbProvider.database;
 
-  /// Obtiene todas las fichas con sus datos de categoría y lista de etiquetas.
+  /// Obtiene todas las fichas con sus datos de categoría y lista de etiquetas en una sola consulta SQL optimizada.
   /// Soporta filtrado por [categoriaId], [busqueda] de texto y [etiquetaNombre].
   Future<List<Ficha>> obtenerTodas({
     int? categoriaId,
@@ -26,20 +27,26 @@ class FichaRepository {
     final db = await _db;
 
     String query = '''
-      SELECT DISTINCT f.*, c.nombre AS nombre_categoria, c.color_hex AS color_categoria
+      SELECT f.*, c.nombre AS nombre_categoria, c.color_hex AS color_categoria,
+             GROUP_CONCAT(e.id || '::' || e.nombre, ';;;') AS etiquetas_agrupadas
       FROM ${AppDatabase.tablaFichas} f
       LEFT JOIN ${AppDatabase.tablaCategorias} c ON f.categoria_id = c.id
+      LEFT JOIN ${AppDatabase.tablaRelaciones} r ON f.id = r.ficha_id
+      LEFT JOIN ${AppDatabase.tablaEtiquetas} e ON r.etiqueta_id = e.id
     ''';
 
     List<dynamic> args = [];
     List<String> condiciones = [];
 
     if (etiquetaNombre != null && etiquetaNombre.trim().isNotEmpty) {
-      query += '''
-        INNER JOIN ${AppDatabase.tablaRelaciones} r ON f.id = r.ficha_id
-        INNER JOIN ${AppDatabase.tablaEtiquetas} e ON r.etiqueta_id = e.id
-      ''';
-      condiciones.add('LOWER(e.nombre) = LOWER(?)');
+      condiciones.add('''
+        f.id IN (
+          SELECT r_sub.ficha_id 
+          FROM ${AppDatabase.tablaRelaciones} r_sub
+          INNER JOIN ${AppDatabase.tablaEtiquetas} e_sub ON r_sub.etiqueta_id = e_sub.id
+          WHERE LOWER(e_sub.nombre) = LOWER(?)
+        )
+      ''');
       args.add(etiquetaNombre.trim());
     }
 
@@ -58,39 +65,56 @@ class FichaRepository {
       query += ' WHERE ${condiciones.join(' AND ')}';
     }
 
-    query += ' ORDER BY f.fecha_modificacion DESC';
+    query += ' GROUP BY f.id ORDER BY f.fecha_modificacion DESC';
 
     final filas = await db.rawQuery(query, args);
 
-    List<Ficha> fichas = [];
-    for (var fila in filas) {
-      final fichaId = fila['id'] as int;
-      final etiquetas = await _etiquetaRepo.obtenerPorFichaId(fichaId);
-      fichas.add(Ficha.fromMap(fila, etiquetas: etiquetas));
-    }
-
-    return fichas;
+    return filas.map((fila) {
+      final etiquetas = _parsearEtiquetasAgrupadas(fila['etiquetas_agrupadas'] as String?);
+      return Ficha.fromMap(fila, etiquetas: etiquetas);
+    }).toList();
   }
 
-  /// Obtiene las N fichas más recientes sin filtros para el carrusel de inicio.
+  /// Obtiene las N fichas más recientes en una sola consulta optimizada.
   Future<List<Ficha>> obtenerRecientes({int limite = 5}) async {
     final db = await _db;
     final query = '''
-      SELECT f.*, c.nombre AS nombre_categoria, c.color_hex AS color_categoria
+      SELECT f.*, c.nombre AS nombre_categoria, c.color_hex AS color_categoria,
+             GROUP_CONCAT(e.id || '::' || e.nombre, ';;;') AS etiquetas_agrupadas
       FROM ${AppDatabase.tablaFichas} f
       LEFT JOIN ${AppDatabase.tablaCategorias} c ON f.categoria_id = c.id
+      LEFT JOIN ${AppDatabase.tablaRelaciones} r ON f.id = r.ficha_id
+      LEFT JOIN ${AppDatabase.tablaEtiquetas} e ON r.etiqueta_id = e.id
+      GROUP BY f.id
       ORDER BY f.fecha_modificacion DESC
       LIMIT ?
     ''';
     final filas = await db.rawQuery(query, [limite]);
 
-    List<Ficha> fichas = [];
-    for (var fila in filas) {
-      final fichaId = fila['id'] as int;
-      final etiquetas = await _etiquetaRepo.obtenerPorFichaId(fichaId);
-      fichas.add(Ficha.fromMap(fila, etiquetas: etiquetas));
+    return filas.map((fila) {
+      final etiquetas = _parsearEtiquetasAgrupadas(fila['etiquetas_agrupadas'] as String?);
+      return Ficha.fromMap(fila, etiquetas: etiquetas);
+    }).toList();
+  }
+
+  /// Auxiliar para transformar el GROUP_CONCAT en lista de Etiqueta.
+  List<Etiqueta> _parsearEtiquetasAgrupadas(String? textoAgrupado) {
+    if (textoAgrupado == null || textoAgrupado.trim().isEmpty) {
+      return const [];
     }
-    return fichas;
+    final lista = <Etiqueta>[];
+    final items = textoAgrupado.split(';;;');
+    for (final item in items) {
+      final partes = item.split('::');
+      if (partes.length == 2) {
+        final id = int.tryParse(partes[0]);
+        final nombre = partes[1];
+        if (id != null && nombre.isNotEmpty) {
+          lista.add(Etiqueta(id: id, nombre: nombre));
+        }
+      }
+    }
+    return lista;
   }
 
   /// Obtiene una ficha completa por su identificador.
