@@ -9,6 +9,9 @@ import 'categorias_screen.dart';
 import 'lista_fichas_screen.dart';
 import 'detalle_editor_screen.dart';
 import 'backup_screen.dart';
+import 'ajustes_screen.dart';
+import '../../providers/ajustes_provider.dart';
+import '../widgets/barra_lateral_xiaomi.dart';
 
 /// Pantalla principal de Simplista.
 class InicioScreen extends ConsumerStatefulWidget {
@@ -218,8 +221,15 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
               ),
               ListTile(
                 leading: const Icon(Icons.account_circle_outlined),
-                title: const Text('Cuenta'),
-                onTap: () {},
+                title: const Text('Cuenta y Ajustes'),
+                subtitle: const Text('Barra Xiaomi, vistas de fichas'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const AjustesScreen()),
+                  );
+                },
               ),
               ListTile(
                 leading: const Icon(Icons.palette_outlined),
@@ -245,7 +255,9 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
             ],
           ),
         ),
-        body: SingleChildScrollView(
+        body: Stack(
+          children: [
+            SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -592,6 +604,25 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
             ],
           ),
         ),
+
+        // Barra lateral Xiaomi opcional para Inicio (desactivada por defecto)
+        Builder(
+          builder: (context) {
+            final ajustes = ref.watch(ajustesProvider);
+            if (!ajustes.barraLateralInicio) {
+              return const SizedBox.shrink();
+            }
+            return BarraLateralXiaomi(
+              esModoInicio: true,
+              onAgregarFormula: () => _abrirEditorConBloque('formula'),
+              onAgregarImagen: () => _abrirEditorConBloque('imagen'),
+              onAgregarNota: () => _abrirEditorConBloque('nota'),
+              onAgregarFecha: () => _abrirEditorConBloque('fecha'),
+            );
+          },
+        ),
+      ],
+    ),
         floatingActionButton: Builder(
           builder: (context) {
             final categorias = categoriasAsync.value;
@@ -623,6 +654,17 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+
+  void _abrirEditorConBloque(String tipo) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DetalleEditorScreen(
+          categoriaIdInicial: _categoriaSeleccionadaId,
         ),
       ),
     );

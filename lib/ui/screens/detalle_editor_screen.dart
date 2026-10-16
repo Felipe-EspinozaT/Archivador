@@ -10,9 +10,12 @@ import '../../providers/fichas_provider.dart';
 import '../../providers/etiquetas_provider.dart';
 import '../../providers/database_provider.dart';
 import '../../services/storage_service.dart';
+import '../../providers/ajustes_provider.dart';
 import '../widgets/etiqueta_chip.dart';
 import '../widgets/recorte_imagen_modal.dart';
 import '../widgets/renderizador_formula_matematica.dart';
+import '../widgets/visor_imagen_completa_modal.dart';
+import '../widgets/barra_lateral_xiaomi.dart';
 
 /// Pantalla con estética de 'Diario de Campo / Bitácora' para visualizar, crear y editar fichas.
 class DetalleEditorScreen extends ConsumerStatefulWidget {
@@ -793,6 +796,22 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
                         onPressed: () => Navigator.pop(context),
                       ),
                     ),
+
+                    // BARRA LATERAL RÁPIDA ESTILO XIAOMI
+                    Builder(
+                      builder: (context) {
+                        final ajustes = ref.watch(ajustesProvider);
+                        if (!ajustes.barraLateralEditor) {
+                          return const SizedBox.shrink();
+                        }
+                        return BarraLateralXiaomi(
+                          onAgregarFormula: _agregarBloqueFormula,
+                          onAgregarImagen: () => _agregarImagenAnexa(ImageSource.gallery, proporcionAncho: 0.5),
+                          onAgregarNota: _agregarBloqueNota,
+                          onAgregarFecha: _agregarBloqueFecha,
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -1084,21 +1103,30 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
 
         return Stack(
           children: [
-            Container(
-              height: alto,
-              width: ancho,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.6), width: 1.5),
-                boxShadow: [
-                  BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 4),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(15),
-                child: kIsWeb
-                    ? Image.network(bloque.valor, fit: BoxFit.cover)
-                    : Image.file(File(bloque.valor), fit: BoxFit.cover, cacheWidth: 300),
+            GestureDetector(
+              onTap: () {
+                VisorImagenCompletaModal.abrir(
+                  context,
+                  rutaOUrl: bloque.valor,
+                  titulo: 'Imagen anexada',
+                );
+              },
+              child: Container(
+                height: alto,
+                width: ancho,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.6), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 4),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(15),
+                  child: kIsWeb
+                      ? Image.network(bloque.valor, fit: BoxFit.cover)
+                      : Image.file(File(bloque.valor), fit: BoxFit.cover, cacheWidth: 300),
+                ),
               ),
             ),
             // Botones de acción en la tarjeta (eliminar y alternar tamaño)
@@ -1267,7 +1295,19 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
                           ),
                           child: Stack(
                             children: [
-                              RenderizadorFormulaMatematica(formula: textoActual),
+                              GestureDetector(
+                                onTap: esImagenPegada
+                                    ? () {
+                                        final path = textoActual.replaceFirst('[[IMG_FORMULA]]:', '');
+                                        VisorImagenCompletaModal.abrir(
+                                          context,
+                                          rutaOUrl: path,
+                                          titulo: 'Fórmula enmarcada',
+                                        );
+                                      }
+                                    : null,
+                                child: RenderizadorFormulaMatematica(formula: textoActual),
+                              ),
                               if (esImagenPegada)
                                 Positioned(
                                   top: 0,
@@ -1418,6 +1458,8 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
             ],
           ),
         );
+      default:
+        return const SizedBox.shrink();
     }
   }
 
@@ -1437,10 +1479,22 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
           if (tienePortada)
             ClipRRect(
               borderRadius: const BorderRadius.vertical(top: Radius.circular(17)),
-              child: SizedBox(
-                height: 180,
-                width: double.infinity,
-                child: _construirContenidoImagenPortada(),
+              child: GestureDetector(
+                onTap: () {
+                  final ruta = _nuevaImagenArchivo?.path ?? _rutaImagenExistente;
+                  if (ruta != null && ruta.isNotEmpty) {
+                    VisorImagenCompletaModal.abrir(
+                      context,
+                      rutaOUrl: ruta,
+                      titulo: 'Foto de Portada',
+                    );
+                  }
+                },
+                child: SizedBox(
+                  height: 180,
+                  width: double.infinity,
+                  child: _construirContenidoImagenPortada(),
+                ),
               ),
             ),
           Padding(
