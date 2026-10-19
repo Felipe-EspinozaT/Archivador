@@ -11,6 +11,7 @@ import 'detalle_editor_screen.dart';
 import 'backup_screen.dart';
 import 'ajustes_screen.dart';
 import '../../providers/ajustes_provider.dart';
+import '../../services/overlay_service.dart';
 import '../widgets/barra_lateral_xiaomi.dart';
 
 /// Pantalla principal de Simplista.
@@ -26,6 +27,30 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
   int? _categoriaSeleccionadaId;
 
   static const double _tamanoCategoria = 95.0;
+
+  @override
+  void initState() {
+    super.initState();
+    OverlayService.escucharAccionesRapidas((payload) {
+      if (mounted) {
+        _abrirEditorConBloque(
+          payload.action,
+          textoInicial: payload.text,
+          rutaPortadaInicial: payload.portada,
+        );
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final payload = await OverlayService.consumirAccionPendiente();
+      if (payload != null && payload.action.isNotEmpty && mounted) {
+        _abrirEditorConBloque(
+          payload.action,
+          textoInicial: payload.text,
+          rutaPortadaInicial: payload.portada,
+        );
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -604,23 +629,6 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
             ],
           ),
         ),
-
-        // Barra lateral Xiaomi opcional para Inicio (desactivada por defecto)
-        Builder(
-          builder: (context) {
-            final ajustes = ref.watch(ajustesProvider);
-            if (!ajustes.barraLateralInicio) {
-              return const SizedBox.shrink();
-            }
-            return BarraLateralXiaomi(
-              esModoInicio: true,
-              onAgregarFormula: () => _abrirEditorConBloque('formula'),
-              onAgregarImagen: () => _abrirEditorConBloque('imagen'),
-              onAgregarNota: () => _abrirEditorConBloque('nota'),
-              onAgregarFecha: () => _abrirEditorConBloque('fecha'),
-            );
-          },
-        ),
       ],
     ),
         floatingActionButton: Builder(
@@ -659,12 +667,19 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
     );
   }
 
-  void _abrirEditorConBloque(String tipo) {
+  void _abrirEditorConBloque(
+    String tipo, {
+    String? textoInicial,
+    String? rutaPortadaInicial,
+  }) {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => DetalleEditorScreen(
           categoriaIdInicial: _categoriaSeleccionadaId,
+          tipoBloqueInicial: tipo,
+          textoInicial: textoInicial,
+          rutaPortadaInicial: rutaPortadaInicial,
         ),
       ),
     );

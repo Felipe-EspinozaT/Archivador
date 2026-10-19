@@ -179,6 +179,56 @@ class FichaRepository {
     });
   }
 
+  /// Restaura o actualiza una ficha desde un respaldo evitando fallos por colisión de IDs.
+  Future<int> restaurarFicha(Ficha ficha, {List<String>? nombresEtiquetas}) async {
+    final db = await _db;
+    return await db.transaction<int>((txn) async {
+      final mapa = Map<String, dynamic>.from(ficha.toMap());
+      final idFicha = await txn.insert(
+        AppDatabase.tablaFichas,
+        mapa,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
+      // Limpiar relaciones previas de esta ficha antes de reinsertar sus etiquetas
+      await txn.delete(
+        AppDatabase.tablaRelaciones,
+        where: 'ficha_id = ?',
+        whereArgs: [idFicha],
+      );
+
+      final tags = nombresEtiquetas ?? ficha.etiquetas.map((e) => e.nombre).toList();
+      for (final nombre in tags) {
+        if (nombre.trim().isEmpty) continue;
+
+        final existentes = await txn.query(
+          AppDatabase.tablaEtiquetas,
+          where: 'LOWER(nombre) = LOWER(?)',
+          whereArgs: [nombre.trim()],
+          limit: 1,
+        );
+
+        int tagId;
+        if (existentes.isNotEmpty) {
+          tagId = existentes.first['id'] as int;
+        } else {
+          tagId = await txn.insert(
+            AppDatabase.tablaEtiquetas,
+            {'nombre': nombre.trim()},
+          );
+        }
+
+        await txn.insert(
+          AppDatabase.tablaRelaciones,
+          {'ficha_id': idFicha, 'etiqueta_id': tagId},
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
+      }
+
+      return idFicha;
+    });
+  }
+
   /// Actualiza una ficha existente y sincroniza sus etiquetas asociadas.
   Future<void> actualizar(Ficha ficha, {List<String>? nuevosNombresEtiquetas}) async {
     if (ficha.id == null) return;

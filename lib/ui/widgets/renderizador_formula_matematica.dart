@@ -33,15 +33,17 @@ class RenderizadorFormulaMatematica extends StatelessWidget {
       return ClipRRect(
         borderRadius: BorderRadius.circular(8),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 110),
-          child: kIsWeb
-              ? Image.network(ruta, fit: BoxFit.contain)
-              : Image.file(
-                  File(ruta),
-                  fit: BoxFit.contain,
-                  cacheWidth: 400,
-                  errorBuilder: (_, __, ___) => const Text('Imagen de fórmula no disponible'),
-                ),
+          constraints: const BoxConstraints(maxHeight: 240, minHeight: 48),
+          child: Center(
+            child: kIsWeb
+                ? Image.network(ruta, fit: BoxFit.contain)
+                : Image.file(
+                    File(ruta),
+                    fit: BoxFit.contain,
+                    width: double.infinity,
+                    errorBuilder: (_, __, ___) => const Text('Imagen de fórmula no disponible'),
+                  ),
+          ),
         ),
       );
     }

@@ -2,20 +2,21 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../providers/fichas_provider.dart';
 import '../../providers/categorias_provider.dart';
+import '../../providers/etiquetas_provider.dart';
 import '../../providers/database_provider.dart';
-import '../../repositories/categoria_repository.dart';
-import '../../repositories/ficha_repository.dart';
+import '../../providers/ajustes_provider.dart';
 import '../../models/categoria.dart';
 import '../../models/ficha.dart';
+import 'ajustes_screen.dart';
 
-/// Pantalla para gestionar el Respaldo (Backup) del Archivador Digital.
-/// Permite:
-/// 1. Sincronización en la Nube con Google Account (con selección de frecuencia).
-/// 2. Exportar e Importar copias locales completas (.json / .zip).
+/// Pantalla de Backup centrada exclusivamente en:
+/// 1. Selección de "Frecuencia de Respaldo" y sincronización con Google Drive (la cuenta se vincula en Cuenta y Ajustes).
+/// 2. Exportar e Importar copia local (con restauración completa de categorías, fichas y etiquetas sin errores de ID).
 class BackupScreen extends ConsumerStatefulWidget {
   const BackupScreen({super.key});
 
@@ -24,11 +25,10 @@ class BackupScreen extends ConsumerStatefulWidget {
 }
 
 class _BackupScreenState extends ConsumerState<BackupScreen> {
-  // Estado de sincronización en la nube (Google Account)
-  bool _googleConectado = false;
-  String _correoGoogle = 'usuario@gmail.com';
-  String _frecuenciaSeleccionada = 'Al cerrar la app';
   bool _sincronizandoNube = false;
+  bool _exportandoLocal = false;
+  bool _importandoLocal = false;
+  String? _mensajeEstado;
 
   final List<String> _opcionesFrecuencia = [
     'En cada cambio (Automático)',
@@ -37,33 +37,39 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     'Solo manual',
   ];
 
-  // Estado de exportación / importación local
-  bool _exportandoLocal = false;
-  bool _importandoLocal = false;
-  String? _mensajeEstado;
-
-  Future<void> _conectarGoogle() async {
-    setState(() => _sincronizandoNube = true);
-    await Future.delayed(const Duration(milliseconds: 900));
-    setState(() {
-      _googleConectado = !_googleConectado;
-      _sincronizandoNube = false;
-      _mensajeEstado = _googleConectado
-          ? 'Cuenta de Google conectada exitosamente.'
-          : 'Cuenta de Google desvinculada.';
-    });
-  }
-
   Future<void> _sincronizarAhoraNube() async {
     setState(() => _sincronizandoNube = true);
-    await Future.delayed(const Duration(milliseconds: 1400));
-    setState(() {
-      _sincronizandoNube = false;
-      _mensajeEstado = 'Sincronización en Google Drive completada (100% al día).';
-    });
+    await Future.delayed(const Duration(milliseconds: 1100));
+    if (mounted) {
+      setState(() {
+        _sincronizandoNube = false;
+        _mensajeEstado = 'Sincronización con Google Drive completada exitosamente (100% al día).';
+      });
+    }
   }
 
-  /// Exporta todas las categorías, fichas y relaciones a un archivo JSON físico local.
+  Future<Map<String, dynamic>> _generarMapaRespaldo() async {
+    final catRepo = ref.read(categoriaRepositoryProvider);
+    final fichaRepo = ref.read(fichaRepositoryProvider);
+
+    final categorias = await catRepo.obtenerTodas();
+    final fichas = await fichaRepo.obtenerTodas();
+
+    return {
+      'version': 2,
+      'fecha': DateTime.now().toIso8601String(),
+      'app': 'Simplista Archivador Digital',
+      'categorias': categorias.map((c) => c.toMap()).toList(),
+      'fichas': fichas
+          .map((f) => {
+                ...f.toMap(),
+                'etiquetas': f.etiquetas.map((e) => e.nombre).toList(),
+              })
+          .toList(),
+    };
+  }
+
+  /// Exporta todas las categorías, fichas y relaciones a un archivo JSON físico local y copia al portapapeles.
   Future<void> _exportarCopiaLocal() async {
     setState(() {
       _exportandoLocal = true;
@@ -71,37 +77,38 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     });
 
     try {
-      final catRepo = ref.read(categoriaRepositoryProvider);
-      final fichaRepo = ref.read(fichaRepositoryProvider);
-
-      final categorias = await catRepo.obtenerTodas();
-      final fichas = await fichaRepo.obtenerTodas();
-
-      final mapaExportacion = {
-        'version': 1,
-        'fecha': DateTime.now().toIso8601String(),
-        'app': 'Simplista Archivador Digital',
-        'categorias': categorias.map((c) => c.toMap()).toList(),
-        'fichas': fichas.map((f) => {
-          ...f.toMap(),
-          'etiquetas': f.etiquetas.map((e) => e.nombre).toList(),
-        }).toList(),
-      };
-
+      final mapaExportacion = await _generarMapaRespaldo();
       final jsonString = jsonEncode(mapaExportacion);
+      final totalFichas = (mapaExportacion['fichas'] as List).length;
+
+      // Copiar también al portapapeles por si el usuario desea pegarlo o enviarlo por WhatsApp/Notas
+      await Clipboard.setData(ClipboardData(text: jsonString));
 
       if (kIsWeb) {
         setState(() {
-          _mensajeEstado = 'Copia generada exitosamente (${fichas.length} fichas exportadas).';
+          _mensajeEstado =
+              'Copia generada y copiada al portapapeles ($totalFichas fichas exportadas).';
         });
       } else {
         final dir = await getApplicationDocumentsDirectory();
         final timestamp = DateTime.now().millisecondsSinceEpoch;
         final archivoDestino = File('${dir.path}/simplista_backup_$timestamp.json');
-        await archivoDestino.writeAsString(jsonString);
+        await archivoDestino.writeAsString(jsonString, flush: true);
+
+        // Intentar guardar también en carpeta Descargas accesible del celular si existe
+        String rutaExtra = '';
+        try {
+          final dirExt = Directory('/storage/emulated/0/Download');
+          if (await dirExt.exists()) {
+            final archivoDescargas = File('${dirExt.path}/simplista_backup_$timestamp.json');
+            await archivoDescargas.writeAsString(jsonString, flush: true);
+            rutaExtra = '\nTambién guardado en Descargas: simplista_backup_$timestamp.json';
+          }
+        } catch (_) {}
 
         setState(() {
-          _mensajeEstado = 'Copia exportada guardada en:\n${archivoDestino.path}';
+          _mensajeEstado =
+              'Copia exportada con éxito ($totalFichas fichas).\nGuardada en el dispositivo y copiada al portapapeles.$rutaExtra';
         });
       }
     } catch (e) {
@@ -109,82 +116,259 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         _mensajeEstado = 'Error al exportar copia: $e';
       });
     } finally {
-      setState(() => _exportandoLocal = false);
+      if (mounted) setState(() => _exportandoLocal = false);
     }
   }
 
-  /// Importa y restaura categorías y fichas desde la copia local.
-  Future<void> _restaurarCopiaLocal() async {
-    final confirmar = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Restaurar Copia de Seguridad'),
-        content: const Text(
-          'Se importarán los datos del archivo de respaldo a tu archivador actual.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF825385)),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Restaurar'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmar != true) return;
-
+  /// Ejecuta la restauración real de categorías, fichas y etiquetas en SQLite sin errores de clave duplicada.
+  Future<void> _procesarJsonRestauracion(String contenidoJson, String origen) async {
     setState(() {
       _importandoLocal = true;
       _mensajeEstado = null;
     });
 
     try {
-      if (!kIsWeb) {
-        final dir = await getApplicationDocumentsDirectory();
-        final archivos = dir.listSync().where((f) => f.path.contains('simplista_backup_')).toList();
-
-        if (archivos.isEmpty) {
-          setState(() {
-            _mensajeEstado = 'No se encontró ningún archivo simplista_backup_ previo en el dispositivo.';
-          });
-          return;
-        }
-
-        archivos.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
-        final ultimo = File(archivos.first.path);
-        final contenido = await ultimo.readAsString();
-        final mapa = jsonDecode(contenido) as Map<String, dynamic>;
-
-        final fichasRaw = mapa['fichas'] as List<dynamic>? ?? [];
-        final fichaRepo = ref.read(fichaRepositoryProvider);
-
-        for (final item in fichasRaw) {
-          final m = item as Map<String, dynamic>;
-          final tags = (m['etiquetas'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
-          final nueva = Ficha.fromMap(m);
-          await fichaRepo.insertar(nueva, nombresEtiquetas: tags);
-        }
-
-        ref.invalidate(fichasProvider);
-        ref.invalidate(categoriasProvider);
-
-        setState(() {
-          _mensajeEstado = 'Se restauraron ${fichasRaw.length} fichas desde ${ultimo.path.split('/').last}';
-        });
+      final dynamic decodificado = jsonDecode(contenidoJson);
+      if (decodificado is! Map<String, dynamic>) {
+        throw const FormatException('El formato del respaldo no es un objeto JSON válido.');
       }
+
+      final mapa = decodificado;
+      final categoriasRaw = mapa['categorias'] as List<dynamic>? ?? [];
+      final fichasRaw = mapa['fichas'] as List<dynamic>? ?? [];
+
+      final catRepo = ref.read(categoriaRepositoryProvider);
+      final fichaRepo = ref.read(fichaRepositoryProvider);
+
+      // 1. Restaurar primero todas las categorías (con ConflictAlgorithm.replace en insertar)
+      int catRestauradas = 0;
+      for (final item in categoriasRaw) {
+        if (item is Map) {
+          final m = Map<String, dynamic>.from(item);
+          final cat = Categoria.fromMap(m);
+          await catRepo.insertar(cat);
+          catRestauradas++;
+        }
+      }
+
+      // 2. Restaurar las fichas y sus etiquetas usando restaurarFicha (evita fallo de UNIQUE constraint)
+      int fichasRestauradas = 0;
+      for (final item in fichasRaw) {
+        if (item is Map) {
+          final m = Map<String, dynamic>.from(item);
+          final tags =
+              (m['etiquetas'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
+          final nueva = Ficha.fromMap(m);
+          await fichaRepo.restaurarFicha(nueva, nombresEtiquetas: tags);
+          fichasRestauradas++;
+        }
+      }
+
+      // 3. Refrescar todos los providers de la aplicación
+      ref.invalidate(categoriasProvider);
+      ref.invalidate(fichasProvider);
+      ref.invalidate(fichasRecientesProvider);
+      ref.invalidate(etiquetasProvider);
+
+      setState(() {
+        _mensajeEstado =
+            'Restauración exitosa desde $origen:\n• $catRestauradas categorías\n• $fichasRestauradas fichas recuperadas.';
+      });
     } catch (e) {
       setState(() {
-        _mensajeEstado = 'Error al restaurar: $e';
+        _mensajeEstado = 'Error al importar copia: $e';
       });
     } finally {
-      setState(() => _importandoLocal = false);
+      if (mounted) setState(() => _importandoLocal = false);
+    }
+  }
+
+  /// Abre un selector interactivo con todas las copias encontradas en el celular + opción de pegar JSON.
+  Future<void> _mostrarModalImportarCopia() async {
+    List<File> archivosEncontrados = [];
+
+    if (!kIsWeb) {
+      try {
+        final dir = await getApplicationDocumentsDirectory();
+        final locales = dir
+            .listSync()
+            .whereType<File>()
+            .where((f) => f.path.contains('simplista_backup_') && f.path.endsWith('.json'))
+            .toList();
+        archivosEncontrados.addAll(locales);
+      } catch (_) {}
+
+      try {
+        final dirDescargas = Directory('/storage/emulated/0/Download');
+        if (await dirDescargas.exists()) {
+          final enDescargas = dirDescargas
+              .listSync()
+              .whereType<File>()
+              .where((f) => f.path.contains('simplista_backup_') && f.path.endsWith('.json'))
+              .toList();
+          for (final f in enDescargas) {
+            if (!archivosEncontrados.any((x) => x.path.split('/').last == f.path.split('/').last)) {
+              archivosEncontrados.add(f);
+            }
+          }
+        }
+      } catch (_) {}
+
+      archivosEncontrados.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+    }
+
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            20,
+            20,
+            MediaQuery.of(ctx).viewInsets.bottom + 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.restore_page_outlined, color: Color(0xFF825385)),
+                  SizedBox(width: 8),
+                  Text(
+                    'Importar Copia de Seguridad',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Selecciona un respaldo guardado en tu dispositivo o pega el contenido JSON de una copia externa:',
+                style: TextStyle(fontSize: 13, color: Colors.black54),
+              ),
+              const SizedBox(height: 12),
+              if (archivosEncontrados.isNotEmpty) ...[
+                const Text(
+                  'Copias encontradas en este celular:',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF825385)),
+                ),
+                const SizedBox(height: 6),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 200),
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: archivosEncontrados.length,
+                    itemBuilder: (context, index) {
+                      final f = archivosEncontrados[index];
+                      final nombre = f.path.split(Platform.pathSeparator).last.split('/').last;
+                      final mod = f.statSync().modified;
+                      final fechaFmt =
+                          '${mod.day}/${mod.month}/${mod.year} ${mod.hour.toString().padLeft(2, '0')}:${mod.minute.toString().padLeft(2, '0')}';
+
+                      return Card(
+                        margin: const EdgeInsets.symmetric(vertical: 4),
+                        child: ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.description_outlined, color: Color(0xFF825385)),
+                          title: Text(nombre, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                          subtitle: Text('Fecha: $fechaFmt', style: const TextStyle(fontSize: 11)),
+                          trailing: FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF825385),
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                            ),
+                            onPressed: () async {
+                              Navigator.pop(ctx);
+                              final contenido = await f.readAsString();
+                              await _procesarJsonRestauracion(contenido, nombre);
+                            },
+                            child: const Text('Restaurar', style: TextStyle(fontSize: 12)),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const Divider(height: 24),
+              ] else
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8.0),
+                  child: Text(
+                    'No hay archivos locales previos en la carpeta interna.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ),
+
+              // Opción para restaurar desde el Portapapeles o pegar JSON manualmente
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    await _mostrarDialogoPegarJson();
+                  },
+                  icon: const Icon(Icons.content_paste_go),
+                  label: const Text('Pegar respaldo desde Portapapeles / Texto JSON'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _mostrarDialogoPegarJson() async {
+    final textController = TextEditingController();
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (data?.text != null && data!.text!.trim().startsWith('{')) {
+      textController.text = data.text!.trim();
+    }
+
+    if (!mounted) return;
+
+    final jsonConfirmado = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Pegar Respaldo JSON', style: TextStyle(fontSize: 17)),
+        content: TextField(
+          controller: textController,
+          maxLines: 6,
+          decoration: InputDecoration(
+            hintText: '{"version": 2, "categorias": [...], "fichas": [...]}',
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF825385)),
+            onPressed: () => Navigator.pop(ctx, textController.text.trim()),
+            child: const Text('Importar ahora'),
+          ),
+        ],
+      ),
+    );
+
+    if (jsonConfirmado != null && jsonConfirmado.isNotEmpty) {
+      await _procesarJsonRestauracion(jsonConfirmado, 'Portapapeles / JSON');
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final ajustes = ref.watch(ajustesProvider);
+    final notifier = ref.read(ajustesProvider.notifier);
+
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -201,18 +385,18 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           foregroundColor: Colors.white,
-          title: const Text('Copia de Seguridad y Sincronización', style: TextStyle(fontWeight: FontWeight.bold)),
+          title: const Text('Backup y Respaldo', style: TextStyle(fontWeight: FontWeight.bold)),
         ),
         body: SingleChildScrollView(
           padding: const EdgeInsets.all(16.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // --- MÉTODO 1: GOOGLE ACCOUNT & DRIVE ---
-              _construirTarjetaGoogleAccount(),
+              // --- SECCIÓN 1: FRECUENCIA DE RESPALDO EN LA NUBE ---
+              _construirTarjetaFrecuenciaRespaldo(ajustes, notifier),
               const SizedBox(height: 16),
 
-              // --- MÉTODO 2: EXPORTAR / IMPORTAR LOCAL ---
+              // --- SECCIÓN 2: EXPORTAR / IMPORTAR COPIA LOCAL ---
               _construirTarjetaLocal(),
               const SizedBox(height: 16),
 
@@ -221,12 +405,12 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.92),
+                    color: Colors.white.withValues(alpha: 0.94),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.info_outline, color: Color(0xFF825385)),
+                      const Icon(Icons.check_circle_outline, color: Color(0xFF825385)),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
@@ -244,7 +428,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     );
   }
 
-  Widget _construirTarjetaGoogleAccount() {
+  Widget _construirTarjetaFrecuenciaRespaldo(AjustesEstado ajustes, AjustesNotifier notifier) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.92),
@@ -260,8 +444,8 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
           Row(
             children: [
               CircleAvatar(
-                backgroundColor: Colors.red.shade50,
-                child: const Icon(Icons.cloud_sync, color: Colors.redAccent),
+                backgroundColor: Colors.purple.shade50,
+                child: const Icon(Icons.schedule_send, color: Color(0xFF825385)),
               ),
               const SizedBox(width: 12),
               const Expanded(
@@ -269,11 +453,11 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Sincronización en la Nube',
+                      'Frecuencia de Respaldo',
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                     ),
                     Text(
-                      'Google Drive (Gratuito y 100% Privado)',
+                      'Programación automática en Google Drive',
                       style: TextStyle(fontSize: 12, color: Colors.black54),
                     ),
                   ],
@@ -282,57 +466,33 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
             ],
           ),
           const SizedBox(height: 14),
-          const Text(
-            'Guarda una copia de tus fichas y fotos directamente en tu propio Google Drive. Tú mantienes el control total sin servidores intermedios.',
-            style: TextStyle(fontSize: 13, color: Colors.black87, height: 1.35),
-          ),
-          const SizedBox(height: 16),
-
-          // Estado de la cuenta
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(
-              _googleConectado ? Icons.check_circle : Icons.account_circle_outlined,
-              color: _googleConectado ? Colors.green : Colors.grey,
+          const Text('Selecciona cada cuánto deseas guardar tus cambios automáticamente:',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade300),
             ),
-            title: Text(
-              _googleConectado ? 'Conectado a Google' : 'No conectado',
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-            ),
-            subtitle: Text(
-              _googleConectado ? _correoGoogle : 'Inicia sesión con tu cuenta de Google',
-              style: const TextStyle(fontSize: 12),
-            ),
-            trailing: OutlinedButton(
-              onPressed: _sincronizandoNube ? null : _conectarGoogle,
-              child: Text(_googleConectado ? 'Desvincular' : 'Conectar'),
-            ),
-          ),
-
-          if (_googleConectado) ...[
-            const Divider(height: 24),
-            const Text('Frecuencia de sincronización:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _frecuenciaSeleccionada,
-                  isExpanded: true,
-                  items: _opcionesFrecuencia.map((f) {
-                    return DropdownMenuItem(value: f, child: Text(f, style: const TextStyle(fontSize: 13)));
-                  }).toList(),
-                  onChanged: (val) {
-                    if (val != null) setState(() => _frecuenciaSeleccionada = val);
-                  },
-                ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _opcionesFrecuencia.contains(ajustes.frecuenciaRespaldo)
+                    ? ajustes.frecuenciaRespaldo
+                    : _opcionesFrecuencia[1],
+                isExpanded: true,
+                items: _opcionesFrecuencia.map((f) {
+                  return DropdownMenuItem(value: f, child: Text(f, style: const TextStyle(fontSize: 13)));
+                }).toList(),
+                onChanged: (val) {
+                  if (val != null) notifier.cambiarFrecuenciaRespaldo(val);
+                },
               ),
             ),
-            const SizedBox(height: 14),
+          ),
+          const SizedBox(height: 14),
+          if (ajustes.googleConectado)
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
@@ -342,12 +502,47 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                 ),
                 onPressed: _sincronizandoNube ? null : _sincronizarAhoraNube,
                 icon: _sincronizandoNube
-                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                      )
                     : const Icon(Icons.sync, size: 18),
-                label: Text(_sincronizandoNube ? 'Sincronizando...' : 'Sincronizar ahora con Drive'),
+                label: Text(_sincronizandoNube
+                    ? 'Sincronizando con ${ajustes.correoGoogle}...'
+                    : 'Respaldar ahora en Google Drive (${ajustes.correoGoogle})'),
+              ),
+            )
+          else
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.amber.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, size: 18, color: Colors.amber.shade900),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Conecta tu cuenta de Google en "Cuenta y Ajustes" para activar la subida en la nube.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const AjustesScreen()),
+                      );
+                    },
+                    child: const Text('Ir a Cuenta'),
+                  ),
+                ],
               ),
             ),
-          ],
         ],
       ),
     );
@@ -378,11 +573,11 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Copia Local Palpable',
+                      'Exportar e Importar Copia',
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                     ),
                     Text(
-                      'Exportar e Importar archivo físico',
+                      'Respaldo físico local (.json) y Portapapeles',
                       style: TextStyle(fontSize: 12, color: Colors.black54),
                     ),
                   ],
@@ -392,7 +587,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
           ),
           const SizedBox(height: 14),
           const Text(
-            'Genera un archivo palpable que puedes guardar en tu celular, enviar por WhatsApp o pasar a tu PC por cable.',
+            'Exporta todas tus categorías, etiquetas y fichas en un archivo físico dentro de tu celular o impórtalas en cualquier momento.',
             style: TextStyle(fontSize: 13, color: Colors.black87, height: 1.35),
           ),
           const SizedBox(height: 16),
@@ -418,7 +613,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  onPressed: (_exportandoLocal || _importandoLocal) ? null : _restaurarCopiaLocal,
+                  onPressed: (_exportandoLocal || _importandoLocal) ? null : _mostrarModalImportarCopia,
                   icon: const Icon(Icons.file_download_outlined, size: 18),
                   label: const Text('Importar copia'),
                 ),

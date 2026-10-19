@@ -21,11 +21,17 @@ import '../widgets/barra_lateral_xiaomi.dart';
 class DetalleEditorScreen extends ConsumerStatefulWidget {
   final Ficha? ficha;
   final int? categoriaIdInicial;
+  final String? tipoBloqueInicial;
+  final String? textoInicial;
+  final String? rutaPortadaInicial;
 
   const DetalleEditorScreen({
     super.key,
     this.ficha,
     this.categoriaIdInicial,
+    this.tipoBloqueInicial,
+    this.textoInicial,
+    this.rutaPortadaInicial,
   });
 
   @override
@@ -48,6 +54,7 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
   // Lista dinámica y persistente de bloques modulares de la bitácora
   final List<BloqueContenido> _bloques = [];
   final Map<String, TextEditingController> _controladoresNotasBloques = {};
+  String? _bloqueFormulaEnEdicionId;
   DateTime? _fechaBitacora;
 
   bool get _esEdicion => widget.ficha != null;
@@ -59,7 +66,10 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
 
     // Desempaquetar contenido previo
     final contenidoDesempaquetado = BloquesContenidoHelper.desempaquetar(widget.ficha?.descripcion);
-    _textoPrincipalController = TextEditingController(text: contenidoDesempaquetado.notaPrincipal);
+    final textoBase = widget.textoInicial != null && widget.textoInicial!.isNotEmpty
+        ? widget.textoInicial!
+        : contenidoDesempaquetado.notaPrincipal;
+    _textoPrincipalController = TextEditingController(text: textoBase);
 
     _bloques.addAll(contenidoDesempaquetado.bloques);
     for (final b in _bloques) {
@@ -72,8 +82,34 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
 
     _categoriaIdSeleccionada = widget.ficha?.categoriaId ?? widget.categoriaIdInicial;
     _rutaImagenExistente = widget.ficha?.rutaImagen;
+    if (widget.rutaPortadaInicial != null && widget.rutaPortadaInicial!.isNotEmpty) {
+      final f = File(widget.rutaPortadaInicial!);
+      if (f.existsSync()) {
+        _nuevaImagenArchivo = f;
+      }
+    }
     _etiquetas = widget.ficha?.etiquetas.map((e) => e.nombre).toList() ?? [];
     _fechaBitacora = widget.ficha?.fechaCreacion ?? DateTime.now();
+
+    if (widget.tipoBloqueInicial != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        switch (widget.tipoBloqueInicial) {
+          case 'formula':
+            _agregarBloqueFormula();
+            break;
+          case 'nota':
+            _agregarBloqueNota();
+            break;
+          case 'imagen':
+            _agregarImagenAnexa(ImageSource.gallery, proporcionAncho: 0.5);
+            break;
+          case 'fecha':
+            _agregarBloqueFecha();
+            break;
+        }
+      });
+    }
   }
 
   @override
@@ -180,6 +216,7 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
     _controladoresNotasBloques[id] = controller;
 
     setState(() {
+      _bloqueFormulaEnEdicionId = id;
       _bloques.add(
         BloqueContenido(
           id: id,
@@ -796,22 +833,6 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
                         onPressed: () => Navigator.pop(context),
                       ),
                     ),
-
-                    // BARRA LATERAL RÁPIDA ESTILO XIAOMI
-                    Builder(
-                      builder: (context) {
-                        final ajustes = ref.watch(ajustesProvider);
-                        if (!ajustes.barraLateralEditor) {
-                          return const SizedBox.shrink();
-                        }
-                        return BarraLateralXiaomi(
-                          onAgregarFormula: _agregarBloqueFormula,
-                          onAgregarImagen: () => _agregarImagenAnexa(ImageSource.gallery, proporcionAncho: 0.5),
-                          onAgregarNota: _agregarBloqueNota,
-                          onAgregarFecha: _agregarBloqueFecha,
-                        );
-                      },
-                    ),
                   ],
                 ),
               ),
@@ -1076,9 +1097,9 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
     );
   }
 
-  Future<void> _pegarImagenEnFormula(TextEditingController? controller) async {
+  Future<void> _pegarImagenEnFormula(TextEditingController? controller, String bloqueId) async {
     if (controller == null) return;
-    final XFile? picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    final XFile? picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 90);
     if (picked == null || !mounted) return;
 
     String rutaFinal = picked.path;
@@ -1086,13 +1107,16 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
       final File? archivoRecortado = await RecorteImagenModal.mostrar(
         context,
         archivoImagen: File(picked.path),
-        aspectoObjetivo: 2.0,
+        aspectoObjetivo: 3.0, // Proporción ideal 3:1 para fórmulas y ecuaciones
       );
       if (archivoRecortado == null || !mounted) return;
       rutaFinal = archivoRecortado.path;
     }
 
     controller.text = '[[IMG_FORMULA]]:$rutaFinal';
+    setState(() {
+      _bloqueFormulaEnEdicionId = null; // Pasar directo a modo solo vista tras pegar imagen
+    });
   }
 
   Widget _construirWidgetBloque(BloqueContenido bloque, int index, double ancho) {
@@ -1238,164 +1262,243 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
       case TipoBloqueContenido.formula:
         final controller = _controladoresNotasBloques[bloque.id] ??=
             TextEditingController(text: bloque.valor);
+        final bool editandoEstaFormula =
+            _bloqueFormulaEnEdicionId == bloque.id || controller.text.trim().isEmpty;
 
-        return Container(
-          decoration: BoxDecoration(
-            color: Colors.blue.shade50.withValues(alpha: 0.94),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.blue.shade200.withValues(alpha: 0.9)),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 4),
-            ],
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.functions, size: 16, color: Color(0xFF1E3A8A)),
-                      SizedBox(width: 4),
-                      Text(
-                        'Fórmula / Ecuación de Ingeniería',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A)),
-                      ),
-                    ],
-                  ),
-                  GestureDetector(
-                    onTap: () => _eliminarBloque(index),
-                    child: const Icon(Icons.close, size: 16, color: Colors.black45),
-                  ),
-                ],
+        return GestureDetector(
+          onTap: () {
+            if (!editandoEstaFormula) {
+              setState(() {
+                _bloqueFormulaEnEdicionId = bloque.id;
+              });
+            }
+          },
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50.withValues(alpha: 0.94),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: editandoEstaFormula
+                    ? const Color(0xFF1E3A8A)
+                    : Colors.blue.shade200.withValues(alpha: 0.9),
+                width: editandoEstaFormula ? 1.5 : 1.0,
               ),
-              const SizedBox(height: 6),
-
-              // Vista previa renderizada estilo Word en tiempo real sin reconstruir toda la pantalla
-              ValueListenableBuilder<TextEditingValue>(
-                valueListenable: controller,
-                builder: (context, value, _) {
-                  final textoActual = value.text.trim();
-                  final esImagenPegada = textoActual.startsWith('[[IMG_FORMULA]]:');
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (textoActual.isNotEmpty)
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                          margin: const EdgeInsets.only(bottom: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: Colors.blue.shade100),
-                          ),
-                          child: Stack(
-                            children: [
-                              GestureDetector(
-                                onTap: esImagenPegada
-                                    ? () {
-                                        final path = textoActual.replaceFirst('[[IMG_FORMULA]]:', '');
-                                        VisorImagenCompletaModal.abrir(
-                                          context,
-                                          rutaOUrl: path,
-                                          titulo: 'Fórmula enmarcada',
-                                        );
-                                      }
-                                    : null,
-                                child: RenderizadorFormulaMatematica(formula: textoActual),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 4),
+              ],
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.functions, size: 16, color: Color(0xFF1E3A8A)),
+                        SizedBox(width: 4),
+                        Text(
+                          'Fórmula / Ecuación',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A)),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        if (editandoEstaFormula && controller.text.trim().isNotEmpty)
+                          GestureDetector(
+                            onTap: () {
+                              FocusScope.of(context).unfocus();
+                              setState(() {
+                                _bloqueFormulaEnEdicionId = null;
+                              });
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              margin: const EdgeInsets.only(right: 8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1E3A8A),
+                                borderRadius: BorderRadius.circular(10),
                               ),
-                              if (esImagenPegada)
-                                Positioned(
-                                  top: 0,
-                                  right: 0,
-                                  child: GestureDetector(
-                                    onTap: () => controller.clear(),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: Colors.blue.shade50,
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(color: Colors.blue.shade200),
-                                      ),
-                                      child: const Text(
-                                        'Cambiar a texto',
-                                        style: TextStyle(fontSize: 10, color: Color(0xFF1E3A8A), fontWeight: FontWeight.w600),
+                              child: const Text(
+                                'Listo',
+                                style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          )
+                        else if (!editandoEstaFormula)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Icon(Icons.edit_outlined, size: 15, color: Colors.blue.shade700),
+                          ),
+                        GestureDetector(
+                          onTap: () => _eliminarBloque(index),
+                          child: const Icon(Icons.close, size: 16, color: Colors.black45),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+
+                // Vista previa renderizada siempre visible (priorizando el contenido)
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: controller,
+                  builder: (context, value, _) {
+                    final textoActual = value.text.trim();
+                    final esImagenPegada = textoActual.startsWith('[[IMG_FORMULA]]:');
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (textoActual.isNotEmpty)
+                          GestureDetector(
+                            onTap: () {
+                              if (esImagenPegada && !editandoEstaFormula) {
+                                final path = textoActual.replaceFirst('[[IMG_FORMULA]]:', '');
+                                VisorImagenCompletaModal.abrir(
+                                  context,
+                                  rutaOUrl: path,
+                                  titulo: 'Fórmula enmarcada',
+                                );
+                              } else if (!editandoEstaFormula) {
+                                setState(() {
+                                  _bloqueFormulaEnEdicionId = bloque.id;
+                                });
+                              }
+                            },
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              margin: EdgeInsets.only(bottom: editandoEstaFormula ? 8 : 0),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.blue.shade100),
+                              ),
+                              child: Stack(
+                                children: [
+                                  RenderizadorFormulaMatematica(formula: textoActual),
+                                  if (esImagenPegada && editandoEstaFormula)
+                                    Positioned(
+                                      top: 0,
+                                      right: 0,
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          GestureDetector(
+                                            onTap: () {
+                                              final path = textoActual.replaceFirst('[[IMG_FORMULA]]:', '');
+                                              VisorImagenCompletaModal.abrir(
+                                                context,
+                                                rutaOUrl: path,
+                                                titulo: 'Fórmula enmarcada',
+                                              );
+                                            },
+                                            child: Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              margin: const EdgeInsets.only(right: 4),
+                                              decoration: BoxDecoration(
+                                                color: Colors.black54,
+                                                borderRadius: BorderRadius.circular(8),
+                                              ),
+                                              child: const Icon(Icons.zoom_in, size: 14, color: Colors.white),
+                                            ),
+                                          ),
+                                          GestureDetector(
+                                            onTap: () => controller.clear(),
+                                            child: Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: Colors.blue.shade50,
+                                                borderRadius: BorderRadius.circular(8),
+                                                border: Border.all(color: Colors.blue.shade200),
+                                              ),
+                                              child: const Text(
+                                                'Cambiar a texto',
+                                                style: TextStyle(fontSize: 10, color: Color(0xFF1E3A8A), fontWeight: FontWeight.w600),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-
-                      // Si no es una imagen pegada, mostrar la caja de edición estilo ecuación de Word
-                      if (!esImagenPegada)
-                        TextFormField(
-                          controller: controller,
-                          keyboardType: TextInputType.text,
-                          textInputAction: TextInputAction.done,
-                          maxLines: 2,
-                          minLines: 1,
-                          style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF1E3A8A),
-                          ),
-                          decoration: InputDecoration(
-                            hintText: 'Escribe números, variables o ecuaciones (ej. V = I * R, x/y, x^2)...',
-                            hintStyle: const TextStyle(color: Colors.black38, fontSize: 11.5),
-                            filled: true,
-                            fillColor: Colors.white.withValues(alpha: 0.85),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: BorderSide(color: Colors.blue.shade200),
+                                ],
+                              ),
                             ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: Color(0xFF1E3A8A), width: 1.5),
-                            ),
-                            isDense: true,
                           ),
-                        ),
-                    ],
-                  );
-                },
-              ),
 
-              // Cinta de ecuaciones estilo Word (Estructuras + Símbolos + Pegar foto de fórmula)
-              TecladoSimbolosIngenieria(
-                alPegarImagenFormula: () => _pegarImagenEnFormula(controller),
-                alInsertar: (simbolo) {
-                  final sel = controller.selection;
-                  final texto = controller.text;
-                  // Si había una imagen pegada y el usuario toca una estructura/símbolo, empezar texto limpio
-                  if (texto.startsWith('[[IMG_FORMULA]]:')) {
-                    controller.text = simbolo;
-                    controller.selection = TextSelection.collapsed(offset: simbolo.length);
-                    return;
-                  }
-                  if (sel.isValid && sel.start >= 0) {
-                    final nuevoTexto = texto.replaceRange(sel.start, sel.end, simbolo);
-                    controller.value = TextEditingValue(
-                      text: nuevoTexto,
-                      selection: TextSelection.collapsed(offset: sel.start + simbolo.length),
+                        // Solo mostrar caja de texto y teclado de ingeniería cuando se hace clic para editar
+                        if (editandoEstaFormula && !esImagenPegada)
+                          TextFormField(
+                            controller: controller,
+                            keyboardType: TextInputType.text,
+                            textInputAction: TextInputAction.done,
+                            onFieldSubmitted: (_) {
+                              setState(() {
+                                _bloqueFormulaEnEdicionId = null;
+                              });
+                            },
+                            maxLines: 2,
+                            minLines: 1,
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF1E3A8A),
+                            ),
+                            decoration: InputDecoration(
+                              hintText: 'Escribe números, variables o ecuaciones (ej. V = I * R, x/y, x^2)...',
+                              hintStyle: const TextStyle(color: Colors.black38, fontSize: 11.5),
+                              filled: true,
+                              fillColor: Colors.white.withValues(alpha: 0.85),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide: BorderSide(color: Colors.blue.shade200),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide: const BorderSide(color: Color(0xFF1E3A8A), width: 1.5),
+                              ),
+                              isDense: true,
+                            ),
+                          ),
+                      ],
                     );
-                  } else {
-                    final nuevoTexto = texto + simbolo;
-                    controller.value = TextEditingValue(
-                      text: nuevoTexto,
-                      selection: TextSelection.collapsed(offset: nuevoTexto.length),
-                    );
-                  }
-                },
-              ),
-            ],
+                  },
+                ),
+
+                // Cinta de ecuaciones estilo Word solo visible en modo edición
+                if (editandoEstaFormula)
+                  TecladoSimbolosIngenieria(
+                    alPegarImagenFormula: () => _pegarImagenEnFormula(controller, bloque.id),
+                    alInsertar: (simbolo) {
+                      final sel = controller.selection;
+                      final texto = controller.text;
+                      if (texto.startsWith('[[IMG_FORMULA]]:')) {
+                        controller.text = simbolo;
+                        controller.selection = TextSelection.collapsed(offset: simbolo.length);
+                        return;
+                      }
+                      if (sel.isValid && sel.start >= 0) {
+                        final nuevoTexto = texto.replaceRange(sel.start, sel.end, simbolo);
+                        controller.value = TextEditingValue(
+                          text: nuevoTexto,
+                          selection: TextSelection.collapsed(offset: sel.start + simbolo.length),
+                        );
+                      } else {
+                        final nuevoTexto = texto + simbolo;
+                        controller.value = TextEditingValue(
+                          text: nuevoTexto,
+                          selection: TextSelection.collapsed(offset: nuevoTexto.length),
+                        );
+                      }
+                    },
+                  ),
+              ],
+            ),
           ),
         );
 
