@@ -3,14 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/categorias_provider.dart';
 import '../../providers/fichas_provider.dart';
 import '../../providers/etiquetas_provider.dart';
+import '../../models/ficha.dart';
 import '../widgets/ficha_card.dart';
 import '../widgets/categoria_card.dart';
 import 'categorias_screen.dart';
 import 'lista_fichas_screen.dart';
 import 'detalle_editor_screen.dart';
 import 'backup_screen.dart';
+import 'sugerencias_screen.dart';
 import 'ajustes_screen.dart';
 import '../../providers/ajustes_provider.dart';
+import '../../providers/database_provider.dart';
 import '../../services/overlay_service.dart';
 import '../widgets/barra_lateral_xiaomi.dart';
 
@@ -22,21 +25,43 @@ class InicioScreen extends ConsumerStatefulWidget {
   ConsumerState<InicioScreen> createState() => _InicioScreenState();
 }
 
-class _InicioScreenState extends ConsumerState<InicioScreen> {
+class _InicioScreenState extends ConsumerState<InicioScreen> with WidgetsBindingObserver {
   final TextEditingController _busquedaController = TextEditingController();
   int? _categoriaSeleccionadaId;
 
   static const double _tamanoCategoria = 95.0;
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // El servicio nativo pudo guardar fichas rápidas mientras la app estaba en segundo plano
+      ref.invalidate(fichasProvider);
+      ref.invalidate(fichasRecientesProvider);
+      ref.invalidate(categoriasProvider);
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      // Respaldo automático al salir/cerrar la app si está configurado
+      final ajustes = ref.read(ajustesProvider);
+      if (ajustes.frecuenciaRespaldo == 'Al cerrar la app' ||
+          ajustes.frecuenciaRespaldo == 'En cada cambio (Automático)') {
+        final packageService = ref.read(backupPackageServiceProvider);
+        packageService.guardarPaqueteEnArchivo(prefijo: 'simplista_auto_backup');
+      }
+    }
+  }
+
+  @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     OverlayService.escucharAccionesRapidas((payload) {
       if (mounted) {
         _abrirEditorConBloque(
           payload.action,
+          tituloInicial: payload.title,
           textoInicial: payload.text,
           rutaPortadaInicial: payload.portada,
+          fichaId: payload.fichaId,
+          categoriaId: payload.categoriaId,
         );
       }
     });
@@ -45,8 +70,11 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
       if (payload != null && payload.action.isNotEmpty && mounted) {
         _abrirEditorConBloque(
           payload.action,
+          tituloInicial: payload.title,
           textoInicial: payload.text,
           rutaPortadaInicial: payload.portada,
+          fichaId: payload.fichaId,
+          categoriaId: payload.categoriaId,
         );
       }
     });
@@ -54,6 +82,7 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _busquedaController.dispose();
     super.dispose();
   }
@@ -259,7 +288,30 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
               ListTile(
                 leading: const Icon(Icons.palette_outlined),
                 title: const Text('Temas'),
-                onTap: () {},
+                onTap: () {
+                  ScaffoldMessenger.of(context).clearSnackBars();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: const Text(
+                            'En desarrollo',
+                            style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                          ),
+                        ),
+                      ),
+                      backgroundColor: Colors.transparent,
+                      elevation: 0,
+                      duration: const Duration(milliseconds: 1400),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
               ),
               ListTile(
                 leading: const Icon(Icons.backup_outlined),
@@ -275,7 +327,13 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
               ListTile(
                 leading: const Icon(Icons.lightbulb_outline),
                 title: const Text('Sugerencias'),
-                onTap: () {},
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SugerenciasScreen()),
+                  );
+                },
               ),
             ],
           ),
@@ -657,7 +715,7 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
               },
               icon: const Icon(Icons.add_photo_alternate),
               label: const Text(
-                'Nueva Ficha',
+                '+ Ficha',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
             );
@@ -667,17 +725,32 @@ class _InicioScreenState extends ConsumerState<InicioScreen> {
     );
   }
 
-  void _abrirEditorConBloque(
+  Future<void> _abrirEditorConBloque(
     String tipo, {
+    String? tituloInicial,
     String? textoInicial,
     String? rutaPortadaInicial,
-  }) {
+    int? fichaId,
+    int? categoriaId,
+  }) async {
+    Ficha? fichaExistente;
+    if (fichaId != null && fichaId > 0) {
+      try {
+        final repo = ref.read(fichaRepositoryProvider);
+        fichaExistente = await repo.obtenerPorId(fichaId);
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => DetalleEditorScreen(
-          categoriaIdInicial: _categoriaSeleccionadaId,
+          ficha: fichaExistente,
+          categoriaIdInicial: categoriaId ?? fichaExistente?.categoriaId ?? _categoriaSeleccionadaId,
           tipoBloqueInicial: tipo,
+          tituloInicial: tituloInicial,
           textoInicial: textoInicial,
           rutaPortadaInicial: rutaPortadaInicial,
         ),

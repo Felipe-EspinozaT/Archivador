@@ -12,6 +12,7 @@ import '../../providers/database_provider.dart';
 import '../../providers/ajustes_provider.dart';
 import '../../models/categoria.dart';
 import '../../models/ficha.dart';
+import '../../services/overlay_service.dart';
 import 'ajustes_screen.dart';
 
 /// Pantalla de Backup centrada exclusivamente en:
@@ -39,12 +40,50 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
 
   Future<void> _sincronizarAhoraNube() async {
     setState(() => _sincronizandoNube = true);
-    await Future.delayed(const Duration(milliseconds: 1100));
-    if (mounted) {
-      setState(() {
-        _sincronizandoNube = false;
-        _mensajeEstado = 'Sincronización con Google Drive completada exitosamente (100% al día).';
-      });
+    try {
+      final packageService = ref.read(backupPackageServiceProvider);
+      final paquete = await packageService.generarPaqueteCompleto();
+      final jsonString = jsonEncode(paquete);
+      final totalFichas = paquete['total_fichas'] ?? 0;
+      final totalImagenes = paquete['total_imagenes'] ?? 0;
+      final fileName = 'simplista_drive_backup_${DateTime.now().millisecondsSinceEpoch}.json';
+
+      // También guardar copia local de respaldo rápido
+      await packageService.guardarPaqueteEnArchivo(prefijo: 'simplista_drive_backup');
+
+      if (OverlayService.soportaOverlayNativo) {
+        final uriGuardado = await OverlayService.guardarArchivoSelectorSistema(
+          fileName: fileName,
+          content: jsonString,
+        );
+        if (mounted) {
+          setState(() {
+            _sincronizandoNube = false;
+            if (uriGuardado != null && uriGuardado.isNotEmpty) {
+              _mensajeEstado =
+                  'Respaldo guardado en la ubicación seleccionada (Google Drive / Dispositivo):\n• $totalFichas fichas\n• $totalImagenes imágenes y portadas incluidas.';
+            } else {
+              _mensajeEstado =
+                  'Se canceló la selección externa, pero se guardó una copia local de seguridad ($totalFichas fichas y $totalImagenes imágenes).';
+            }
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _sincronizandoNube = false;
+            _mensajeEstado =
+                'Respaldo generado exitosamente:\n• $totalFichas fichas\n• $totalImagenes imágenes y portadas aseguradas.';
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _sincronizandoNube = false;
+          _mensajeEstado = 'Error al guardar respaldo en Google Drive: $e';
+        });
+      }
     }
   }
 
@@ -69,7 +108,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     };
   }
 
-  /// Exporta todas las categorías, fichas y relaciones a un archivo JSON físico local y copia al portapapeles.
+  /// Exporta todas las categorías, fichas, etiquetas e imágenes en un paquete completo.
   Future<void> _exportarCopiaLocal() async {
     setState(() {
       _exportandoLocal = true;
@@ -77,40 +116,16 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     });
 
     try {
-      final mapaExportacion = await _generarMapaRespaldo();
-      final jsonString = jsonEncode(mapaExportacion);
-      final totalFichas = (mapaExportacion['fichas'] as List).length;
+      final packageService = ref.read(backupPackageServiceProvider);
+      final archivoGenerado = await packageService.guardarPaqueteEnArchivo();
+      final paquete = await packageService.generarPaqueteCompleto();
+      final totalFichas = paquete['total_fichas'] ?? 0;
+      final totalImagenes = paquete['total_imagenes'] ?? 0;
 
-      // Copiar también al portapapeles por si el usuario desea pegarlo o enviarlo por WhatsApp/Notas
-      await Clipboard.setData(ClipboardData(text: jsonString));
-
-      if (kIsWeb) {
-        setState(() {
-          _mensajeEstado =
-              'Copia generada y copiada al portapapeles ($totalFichas fichas exportadas).';
-        });
-      } else {
-        final dir = await getApplicationDocumentsDirectory();
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
-        final archivoDestino = File('${dir.path}/simplista_backup_$timestamp.json');
-        await archivoDestino.writeAsString(jsonString, flush: true);
-
-        // Intentar guardar también en carpeta Descargas accesible del celular si existe
-        String rutaExtra = '';
-        try {
-          final dirExt = Directory('/storage/emulated/0/Download');
-          if (await dirExt.exists()) {
-            final archivoDescargas = File('${dirExt.path}/simplista_backup_$timestamp.json');
-            await archivoDescargas.writeAsString(jsonString, flush: true);
-            rutaExtra = '\nTambién guardado en Descargas: simplista_backup_$timestamp.json';
-          }
-        } catch (_) {}
-
-        setState(() {
-          _mensajeEstado =
-              'Copia exportada con éxito ($totalFichas fichas).\nGuardada en el dispositivo y copiada al portapapeles.$rutaExtra';
-        });
-      }
+      setState(() {
+        _mensajeEstado =
+            'Respaldo completo exportado con éxito:\n• $totalFichas fichas\n• $totalImagenes imágenes/portadas incluidas.\nGuardado en: ${archivoGenerado.path.split("/").last} y en Descargas.';
+      });
     } catch (e) {
       setState(() {
         _mensajeEstado = 'Error al exportar copia: $e';
@@ -120,7 +135,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     }
   }
 
-  /// Ejecuta la restauración real de categorías, fichas y etiquetas en SQLite sin errores de clave duplicada.
+  /// Ejecuta la restauración real de categorías, fichas, etiquetas e imágenes asociadas.
   Future<void> _procesarJsonRestauracion(String contenidoJson, String origen) async {
     setState(() {
       _importandoLocal = true;
@@ -133,38 +148,10 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         throw const FormatException('El formato del respaldo no es un objeto JSON válido.');
       }
 
-      final mapa = decodificado;
-      final categoriasRaw = mapa['categorias'] as List<dynamic>? ?? [];
-      final fichasRaw = mapa['fichas'] as List<dynamic>? ?? [];
+      final packageService = ref.read(backupPackageServiceProvider);
+      final resultado = await packageService.restaurarPaqueteCompleto(decodificado);
 
-      final catRepo = ref.read(categoriaRepositoryProvider);
-      final fichaRepo = ref.read(fichaRepositoryProvider);
-
-      // 1. Restaurar primero todas las categorías (con ConflictAlgorithm.replace en insertar)
-      int catRestauradas = 0;
-      for (final item in categoriasRaw) {
-        if (item is Map) {
-          final m = Map<String, dynamic>.from(item);
-          final cat = Categoria.fromMap(m);
-          await catRepo.insertar(cat);
-          catRestauradas++;
-        }
-      }
-
-      // 2. Restaurar las fichas y sus etiquetas usando restaurarFicha (evita fallo de UNIQUE constraint)
-      int fichasRestauradas = 0;
-      for (final item in fichasRaw) {
-        if (item is Map) {
-          final m = Map<String, dynamic>.from(item);
-          final tags =
-              (m['etiquetas'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
-          final nueva = Ficha.fromMap(m);
-          await fichaRepo.restaurarFicha(nueva, nombresEtiquetas: tags);
-          fichasRestauradas++;
-        }
-      }
-
-      // 3. Refrescar todos los providers de la aplicación
+      // Refrescar todos los providers de la aplicación
       ref.invalidate(categoriasProvider);
       ref.invalidate(fichasProvider);
       ref.invalidate(fichasRecientesProvider);
@@ -172,7 +159,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
 
       setState(() {
         _mensajeEstado =
-            'Restauración exitosa desde $origen:\n• $catRestauradas categorías\n• $fichasRestauradas fichas recuperadas.';
+            'Restauración exitosa desde $origen:\n• ${resultado["categorias"]} categorías\n• ${resultado["fichas"]} fichas recuperadas\n• ${resultado["imagenes"]} imágenes/portadas restauradas con éxito.';
       });
     } catch (e) {
       setState(() {
@@ -222,102 +209,134 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
       builder: (ctx) {
-        return Padding(
-          padding: EdgeInsets.fromLTRB(
-            20,
-            20,
-            20,
-            MediaQuery.of(ctx).viewInsets.bottom + 24,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Row(
+        final navBarBottom = MediaQuery.of(ctx).viewPadding.bottom;
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              20,
+              20,
+              MediaQuery.of(ctx).viewInsets.bottom + navBarBottom + 16,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.restore_page_outlined, color: Color(0xFF825385)),
-                  SizedBox(width: 8),
-                  Text(
-                    'Importar Copia de Seguridad',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  const Row(
+                    children: [
+                      Icon(Icons.restore_page_outlined, color: Color(0xFF825385)),
+                      SizedBox(width: 8),
+                      Text(
+                        'Importar Copia de Seguridad',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Selecciona un archivo del dispositivo, busca en cualquier carpeta o restaura desde Google Drive:',
+                    style: TextStyle(fontSize: 13, color: Colors.black54),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Botón para examinar en cualquier carpeta o Drive usando SAF
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.tonalIcon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF825385).withValues(alpha: 0.15),
+                        foregroundColor: const Color(0xFF825385),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      onPressed: () async {
+                        Navigator.pop(ctx);
+                        final contenido = await OverlayService.abrirArchivoSelectorSistema();
+                        if (contenido != null && contenido.isNotEmpty) {
+                          await _procesarJsonRestauracion(contenido, 'archivo seleccionado');
+                        }
+                      },
+                      icon: const Icon(Icons.folder_open),
+                      label: const Text(
+                        'Buscar archivo .json en otra carpeta / Drive',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  if (archivosEncontrados.isNotEmpty) ...[
+                    const Text(
+                      'Copias detectadas recientemente:',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF825385)),
+                    ),
+                    const SizedBox(height: 6),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 180),
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: archivosEncontrados.length,
+                        itemBuilder: (context, index) {
+                          final f = archivosEncontrados[index];
+                          final nombre = f.path.split(Platform.pathSeparator).last.split('/').last;
+                          final mod = f.statSync().modified;
+                          final fechaFmt =
+                              '${mod.day}/${mod.month}/${mod.year} ${mod.hour.toString().padLeft(2, '0')}:${mod.minute.toString().padLeft(2, '0')}';
+
+                          return Card(
+                            margin: const EdgeInsets.symmetric(vertical: 4),
+                            child: ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.description_outlined, color: Color(0xFF825385)),
+                              title: Text(nombre, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                              subtitle: Text('Fecha: $fechaFmt', style: const TextStyle(fontSize: 11)),
+                              trailing: FilledButton(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: const Color(0xFF825385),
+                                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                                ),
+                                onPressed: () async {
+                                  Navigator.pop(ctx);
+                                  final contenido = await f.readAsString();
+                                  await _procesarJsonRestauracion(contenido, nombre);
+                                },
+                                child: const Text('Restaurar', style: TextStyle(fontSize: 12)),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const Divider(height: 20),
+                  ] else
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 6.0),
+                      child: Text(
+                        'No hay archivos locales automáticos en la carpeta interna.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                    ),
+
+                  // Opción para restaurar desde el Portapapeles o pegar JSON manualmente
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () async {
+                        Navigator.pop(ctx);
+                        await _mostrarDialogoPegarJson();
+                      },
+                      icon: const Icon(Icons.content_paste_go),
+                      label: const Text('Pegar respaldo desde Portapapeles / Texto JSON'),
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'Selecciona un respaldo guardado en tu dispositivo o pega el contenido JSON de una copia externa:',
-                style: TextStyle(fontSize: 13, color: Colors.black54),
-              ),
-              const SizedBox(height: 12),
-              if (archivosEncontrados.isNotEmpty) ...[
-                const Text(
-                  'Copias encontradas en este celular:',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF825385)),
-                ),
-                const SizedBox(height: 6),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 200),
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: archivosEncontrados.length,
-                    itemBuilder: (context, index) {
-                      final f = archivosEncontrados[index];
-                      final nombre = f.path.split(Platform.pathSeparator).last.split('/').last;
-                      final mod = f.statSync().modified;
-                      final fechaFmt =
-                          '${mod.day}/${mod.month}/${mod.year} ${mod.hour.toString().padLeft(2, '0')}:${mod.minute.toString().padLeft(2, '0')}';
-
-                      return Card(
-                        margin: const EdgeInsets.symmetric(vertical: 4),
-                        child: ListTile(
-                          dense: true,
-                          leading: const Icon(Icons.description_outlined, color: Color(0xFF825385)),
-                          title: Text(nombre, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                          subtitle: Text('Fecha: $fechaFmt', style: const TextStyle(fontSize: 11)),
-                          trailing: FilledButton(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFF825385),
-                              padding: const EdgeInsets.symmetric(horizontal: 12),
-                            ),
-                            onPressed: () async {
-                              Navigator.pop(ctx);
-                              final contenido = await f.readAsString();
-                              await _procesarJsonRestauracion(contenido, nombre);
-                            },
-                            child: const Text('Restaurar', style: TextStyle(fontSize: 12)),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                const Divider(height: 24),
-              ] else
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8.0),
-                  child: Text(
-                    'No hay archivos locales previos en la carpeta interna.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ),
-
-              // Opción para restaurar desde el Portapapeles o pegar JSON manualmente
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: () async {
-                    Navigator.pop(ctx);
-                    await _mostrarDialogoPegarJson();
-                  },
-                  icon: const Icon(Icons.content_paste_go),
-                  label: const Text('Pegar respaldo desde Portapapeles / Texto JSON'),
-                ),
-              ),
-            ],
+            ),
           ),
         );
       },
@@ -492,7 +511,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
             ),
           ),
           const SizedBox(height: 14),
-          if (ajustes.googleConectado)
+          if (ajustes.googleConectado) ...[
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
@@ -507,13 +526,65 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                         height: 16,
                         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                       )
-                    : const Icon(Icons.sync, size: 18),
+                    : const Icon(Icons.cloud_upload_outlined, size: 18),
                 label: Text(_sincronizandoNube
                     ? 'Sincronizando con ${ajustes.correoGoogle}...'
-                    : 'Respaldar ahora en Google Drive (${ajustes.correoGoogle})'),
+                    : 'Guardar copia ahora en Google Drive'),
               ),
-            )
-          else
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF825385),
+                  side: const BorderSide(color: Color(0xFF825385)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                onPressed: _sincronizandoNube ? null : () async {
+                  setState(() => _sincronizandoNube = true);
+                  try {
+                    if (OverlayService.soportaOverlayNativo) {
+                      final contenidoSeleccionado = await OverlayService.abrirArchivoSelectorSistema();
+                      if (contenidoSeleccionado != null && contenidoSeleccionado.isNotEmpty) {
+                        await _procesarJsonRestauracion(contenidoSeleccionado, 'Google Drive / Selector del Sistema');
+                        return;
+                      }
+                    }
+
+                    // Fallback si el usuario cierra el selector o está en escritorio: buscar copia local de drive
+                    final dir = await getApplicationDocumentsDirectory();
+                    final copias = dir
+                        .listSync()
+                        .whereType<File>()
+                        .where((f) => f.path.contains('simplista_drive_backup') && f.path.endsWith('.json'))
+                        .toList();
+
+                    if (copias.isEmpty) {
+                      setState(() {
+                        _sincronizandoNube = false;
+                        _mensajeEstado = 'No se seleccionó ningún archivo en el selector de Google Drive.';
+                      });
+                      return;
+                    }
+
+                    copias.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+                    final masReciente = copias.first;
+                    final contenido = await masReciente.readAsString();
+                    await _procesarJsonRestauracion(contenido, 'Copia rápida local (${masReciente.path.split("/").last})');
+                  } catch (e) {
+                    setState(() {
+                      _mensajeEstado = 'Error al restaurar desde Google Drive: $e';
+                    });
+                  } finally {
+                    if (mounted) setState(() => _sincronizandoNube = false);
+                  }
+                },
+                icon: const Icon(Icons.cloud_download_outlined, size: 18),
+                label: const Text('Restaurar desde Google Drive (Elegir archivo)'),
+              ),
+            ),
+          ] else
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(

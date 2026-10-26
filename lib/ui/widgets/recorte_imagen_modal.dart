@@ -192,22 +192,25 @@ class _RecorteImagenModalState extends State<RecorteImagenModal> {
                     ),
                   ),
                 ),
-                Container(
-                  color: Colors.grey.shade900,
-                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _botonProporcion('Fórmula 3:1', 3.0),
-                        const SizedBox(width: 8),
-                        _botonProporcion('Rectangular 2:1', 2.0),
-                        const SizedBox(width: 8),
-                        _botonProporcion('Cuadrado 1:1', 1.0),
-                        const SizedBox(width: 8),
-                        _botonProporcion('Vertical 3:4', 0.75),
-                      ],
+                SafeArea(
+                  top: false,
+                  child: Container(
+                    color: Colors.grey.shade900,
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _botonProporcion('Fórmula 3:1', 3.0),
+                          const SizedBox(width: 8),
+                          _botonProporcion('Rectangular 2:1', 2.0),
+                          const SizedBox(width: 8),
+                          _botonProporcion('Cuadrado 1:1', 1.0),
+                          const SizedBox(width: 8),
+                          _botonProporcion('Vertical 3:4', 0.75),
+                        ],
+                      ),
                     ),
                   ),
                 ),

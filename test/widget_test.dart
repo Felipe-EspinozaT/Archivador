@@ -110,8 +110,8 @@ void main() {
     Navigator.of(tester.element(find.byType(CategoriasScreen))).pop();
     await tester.pumpAndSettle();
 
-    // Buscar y presionar el botón de Nueva Ficha
-    final botonNuevaFicha = find.widgetWithText(FloatingActionButton, 'Nueva Ficha');
+    // Buscar y presionar el botón de + Ficha
+    final botonNuevaFicha = find.widgetWithText(FloatingActionButton, '+ Ficha');
     expect(botonNuevaFicha, findsOneWidget);
 
     await tester.tap(botonNuevaFicha);
@@ -122,12 +122,9 @@ void main() {
     expect(find.text('Título de la ficha...'), findsOneWidget);
     expect(find.text('Guardar'), findsOneWidget);
 
-    // Verificar que el botón de modal de Etiquetas esté presente en la barra superior
+    // Verificar que el botón de modal de Etiquetas y la barra de acciones estén presentes
     expect(find.text('Etiquetas'), findsOneWidget);
-    expect(find.text('+ Contenido'), findsOneWidget);
-
-    // Verificar que la categoría activa 'Documentos' esté precargada en el dropdown
-    expect(find.text('Documentos'), findsOneWidget);
+    expect(find.text('Nota'), findsOneWidget);
   });
 }
 

@@ -154,7 +154,7 @@ class _AjustesScreenState extends ConsumerState<AjustesScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Cuenta y Ajustes'),
+        title: const Text('Cuenta'),
       ),
       body: ListView(
         children: [
@@ -232,11 +232,11 @@ class _AjustesScreenState extends ConsumerState<AjustesScreen> {
 
           const Divider(height: 32),
 
-          // 2. SECCIÓN DE BARRA LATERAL RÁPIDA (XIAOMI)
+          // 2. SECCIÓN DE SELECCIÓN RÁPIDA
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: Text(
-              'BARRA LATERAL DE ATAJOS (ESTILO XIAOMI)',
+              'BARRA LATERAL',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
@@ -246,16 +246,19 @@ class _AjustesScreenState extends ConsumerState<AjustesScreen> {
             ),
           ),
           SwitchListTile(
-            title: const Text('Barra rápida flotante (Iconos circulares)'),
+            title: const Text(
+              'Selección rápida (siempre listo)',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             subtitle: const Text(
-              'Pestaña lateral para notas rápidas con captura de portada, fórmulas y fotos. Funciona sobre cualquier app con consumo mínimo.',
+              'Notas rápidas con título y descripción con una captura para portada, y opción de agregar contenido a la última ficha interactuada',
             ),
             value: ajustes.barraLateralSistema,
             activeThumbColor: const Color(0xFF825385),
             onChanged: _manejarToggleSegundoPlano,
           ),
           ListTile(
-            title: const Text('Lado de la barra lateral'),
+            title: const Text('Lado de ubicación'),
             subtitle: Text(ajustes.ladoBarra == 'derecha' ? 'Borde Derecho' : 'Borde Izquierdo'),
             trailing: SegmentedButton<String>(
               segments: const [
@@ -273,41 +276,113 @@ class _AjustesScreenState extends ConsumerState<AjustesScreen> {
             ),
           ),
 
-          const Divider(height: 32),
-
-          // 3. SECCIÓN DE VISTAS ESTILO NOTION
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: Text(
-              'VISTA DE FICHAS Y CATEGORÍAS (ESTILO NOTION)',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF825385),
-                letterSpacing: 1.1,
-              ),
-            ),
-          ),
-          ListTile(
-            title: const Text('Disposición predeterminada de fichas'),
-            subtitle: Text(
-              ajustes.vistaFichasDefault == 'cuadricula'
-                  ? 'Galería / Cuadrícula visual'
-                  : ajustes.vistaFichasDefault == 'lista'
-                      ? 'Lista detallada'
-                      : 'Tabla compacta',
-            ),
-            trailing: DropdownButton<String>(
-              value: ajustes.vistaFichasDefault,
-              underline: const SizedBox.shrink(),
-              items: const [
-                DropdownMenuItem(value: 'cuadricula', child: Text('Galería')),
-                DropdownMenuItem(value: 'lista', child: Text('Lista')),
-                DropdownMenuItem(value: 'tabla', child: Text('Tabla')),
+          // GUÍA VISUAL / TARJETA DE RECOMENDACIÓN DE OPCIONES
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E293B),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white24),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.12),
+                  blurRadius: 8,
+                  offset: const Offset(0, 3),
+                ),
               ],
-              onChanged: (val) {
-                if (val != null) notifier.cambiarVistaDefault(val);
-              },
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Color(0xFF38BDF8), size: 18),
+                    SizedBox(width: 8),
+                    Text(
+                      'Guía de botones al presionar la "S"',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF825385),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Center(
+                        child: Text(
+                          '+',
+                          style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Ficha Rápida nueva',
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
+                          ),
+                          Text(
+                            'Recorta la pantalla y crea una ficha con título, descripción y categoría.',
+                            style: TextStyle(color: Colors.white70, fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Divider(color: Colors.white12, height: 1),
+                ),
+                Row(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF0284C7),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Center(
+                        child: Text(
+                          '⤵',
+                          style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Agregar contenido a la ficha reciente',
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
+                          ),
+                          Text(
+                            'Despliega barra horizontal para anexar Nota, Recorte, Fórmula o Fecha a la última ficha.',
+                            style: TextStyle(color: Colors.white70, fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 24),

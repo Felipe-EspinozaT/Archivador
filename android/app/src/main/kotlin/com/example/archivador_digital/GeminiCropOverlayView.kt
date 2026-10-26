@@ -10,9 +10,14 @@ import android.graphics.Path
 import android.graphics.PointF
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
 import android.graphics.RectF
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.max
@@ -21,41 +26,38 @@ import kotlin.math.min
 class GeminiCropOverlayView(
     context: Context,
     private val fullScreenshotPath: String?,
+    private val onCancelar: () -> Unit,
+    private val onOmitir: () -> Unit,
     private val onAreaSelected: (String?) -> Unit
-) : View(context) {
+) : FrameLayout(context) {
 
     private var fullBitmap: Bitmap? = null
     private val paintDim = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#99000000") // Oscurecido general
+        color = Color.parseColor("#99000000")
     }
     private val paintClear = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
     }
-
-    // Pincel para esquinas / bordes blancos elegantes estilo Gemini / Circle to search
     private val paintBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         style = Paint.Style.STROKE
         strokeWidth = 3f * resources.displayMetrics.density
         strokeCap = Paint.Cap.ROUND
     }
-
-    // Pincel para el resplandor / brillo
     private val paintGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#8060A5FA") // Azul claro / destello
+        color = Color.parseColor("#9038BDF8")
         style = Paint.Style.STROKE
         strokeWidth = 6f * resources.displayMetrics.density
         strokeCap = Paint.Cap.ROUND
     }
+    private val paintBitmap = Paint(Paint.FILTER_BITMAP_FLAG)
 
     private var startPoint = PointF()
-    private var currentPoint = PointF()
-    private var isSelecting = false
     private var selectionRect: RectF? = null
 
+    private val drawingView: View
+
     init {
-        // Habilitar aceleración por capas de software si se usa PorterDuff.CLEAR
-        setLayerType(LAYER_TYPE_SOFTWARE, null)
         if (fullScreenshotPath != null && File(fullScreenshotPath).exists()) {
             try {
                 fullBitmap = BitmapFactory.decodeFile(fullScreenshotPath)
@@ -63,42 +65,196 @@ class GeminiCropOverlayView(
                 e.printStackTrace()
             }
         }
+
+        drawingView = object : View(context) {
+            init {
+                setLayerType(LAYER_TYPE_SOFTWARE, null)
+            }
+
+            override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+                super.onSizeChanged(w, h, oldw, oldh)
+                // Inicializar un rectángulo editable en el centro si aún no hay uno
+                if (selectionRect == null && w > 0 && h > 0) {
+                    val margenX = w * 0.14f
+                    val margenY = h * 0.24f
+                    selectionRect = RectF(margenX, margenY, w - margenX, h - margenY)
+                }
+            }
+
+            override fun onDraw(canvas: Canvas) {
+                super.onDraw(canvas)
+                // 1. Pintar la captura congelada de fondo si existe
+                val bmp = fullBitmap
+                if (bmp != null) {
+                    val dest = Rect(0, 0, width, height)
+                    canvas.drawBitmap(bmp, null, dest, paintBitmap)
+                }
+
+                // 2. Capa de oscurecimiento en un saveLayer para que PorterDuff.CLEAR solo borre el velo oscuro y no el bitmap de fondo
+                val saveCount = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), null)
+                canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paintDim)
+
+                val rect = selectionRect
+                val density = resources.displayMetrics.density
+                val cornerRadius = 16f * density
+                val cornerLen = 26f * density
+
+                if (rect != null && rect.width() > 10 && rect.height() > 10) {
+                    canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paintClear)
+                }
+                canvas.restoreToCount(saveCount)
+
+                if (rect != null && rect.width() > 10 && rect.height() > 10) {
+                    canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paintGlow)
+                    dibujarEsquinasVisor(canvas, rect, cornerLen, cornerRadius)
+                }
+            }
+        }
+        addView(drawingView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+
+        val densidad = resources.displayMetrics.density
+        val topBar = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding((16 * densidad).toInt(), (40 * densidad).toInt(), (16 * densidad).toInt(), (12 * densidad).toInt())
+        }
+
+        val btnCancelar = TextView(context).apply {
+            text = "✕ Cancelar"
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setPadding((12 * densidad).toInt(), (8 * densidad).toInt(), (12 * densidad).toInt(), (8 * densidad).toInt())
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.parseColor("#CC1E293B"))
+                cornerRadius = 16 * densidad
+                setStroke((1 * densidad).toInt(), Color.parseColor("#66FFFFFF"))
+            }
+            setOnClickListener { onCancelar() }
+        }
+        topBar.addView(btnCancelar)
+
+        val spacer = View(context).apply {
+            layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+        }
+        topBar.addView(spacer)
+
+        val btnOmitir = TextView(context).apply {
+            text = "Omitir imagen"
+            setTextColor(Color.parseColor("#E2E8F0"))
+            textSize = 13f
+            setPadding((12 * densidad).toInt(), (8 * densidad).toInt(), (12 * densidad).toInt(), (8 * densidad).toInt())
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.parseColor("#CC334155"))
+                cornerRadius = 16 * densidad
+            }
+            setOnClickListener { onOmitir() }
+        }
+        val lpOmitir = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            marginEnd = (8 * densidad).toInt()
+        }
+        topBar.addView(btnOmitir, lpOmitir)
+
+        val btnAplicar = TextView(context).apply {
+            text = "✓ Recortar"
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setPadding((14 * densidad).toInt(), (8 * densidad).toInt(), (14 * densidad).toInt(), (8 * densidad).toInt())
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.parseColor("#825385"))
+                cornerRadius = 16 * densidad
+            }
+            setOnClickListener {
+                val rect = selectionRect
+                if (rect != null && rect.width() > 20 && rect.height() > 20) {
+                    val cropped = recortarBitmap(rect)
+                    onAreaSelected(cropped ?: fullScreenshotPath)
+                } else {
+                    onAreaSelected(fullScreenshotPath)
+                }
+            }
+        }
+        topBar.addView(btnAplicar)
+
+        addView(topBar, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+    }
+
+    private var modoArrastre = 0
+    private var bordesActivos = 0
+    private var ultimoX = 0f
+    private var ultimoY = 0f
+    private val minLado get() = 60f * resources.displayMetrics.density
+
+    private fun detectarBordes(r: RectF, x: Float, y: Float): Int {
+        val t = 30f * resources.displayMetrics.density
+        var b = 0
+        val dentroY = y > r.top - t && y < r.bottom + t
+        val dentroX = x > r.left - t && x < r.right + t
+        if (dentroY && kotlin.math.abs(x - r.left) < t) b = b or 1
+        if (dentroX && kotlin.math.abs(y - r.top) < t) b = b or 2
+        if (dentroY && kotlin.math.abs(x - r.right) < t) b = b or 4
+        if (dentroX && kotlin.math.abs(y - r.bottom) < t) b = b or 8
+        return b
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        val rect = selectionRect
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                ultimoX = event.x
+                ultimoY = event.y
+                if (rect != null) {
+                    val bordes = detectarBordes(rect, event.x, event.y)
+                    if (bordes != 0) {
+                        modoArrastre = 2
+                        bordesActivos = bordes
+                        return true
+                    }
+                    if (rect.contains(event.x, event.y)) {
+                        modoArrastre = 1
+                        return true
+                    }
+                }
+                modoArrastre = 0
                 startPoint.set(event.x, event.y)
-                currentPoint.set(event.x, event.y)
-                isSelecting = true
                 selectionRect = null
-                invalidate()
+                drawingView.invalidate()
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                if (isSelecting) {
-                    currentPoint.set(event.x, event.y)
-                    val left = min(startPoint.x, currentPoint.x)
-                    val top = min(startPoint.y, currentPoint.y)
-                    val right = max(startPoint.x, currentPoint.x)
-                    val bottom = max(startPoint.y, currentPoint.y)
-                    selectionRect = RectF(left, top, right, bottom)
-                    invalidate()
+                val dx = event.x - ultimoX
+                val dy = event.y - ultimoY
+                when (modoArrastre) {
+                    0 -> {
+                        selectionRect = RectF(
+                            min(startPoint.x, event.x), min(startPoint.y, event.y),
+                            max(startPoint.x, event.x), max(startPoint.y, event.y)
+                        )
+                    }
+                    1 -> rect?.let {
+                        val nx = (it.left + dx).coerceIn(0f, width - it.width())
+                        val ny = (it.top + dy).coerceIn(0f, height - it.height())
+                        it.offsetTo(nx, ny)
+                    }
+                    2 -> rect?.let {
+                        if (bordesActivos and 1 != 0) it.left = min(max(0f, it.left + dx), it.right - minLado)
+                        if (bordesActivos and 2 != 0) it.top = min(max(0f, it.top + dy), it.bottom - minLado)
+                        if (bordesActivos and 4 != 0) it.right = max(min(width.toFloat(), it.right + dx), it.left + minLado)
+                        if (bordesActivos and 8 != 0) it.bottom = max(min(height.toFloat(), it.bottom + dy), it.top + minLado)
+                    }
                 }
+                ultimoX = event.x
+                ultimoY = event.y
+                drawingView.invalidate()
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (isSelecting) {
-                    isSelecting = false
-                    val rect = selectionRect
-                    if (rect != null && rect.width() > 30 && rect.height() > 30) {
-                        val croppedPath = recortarBitmap(rect)
-                        onAreaSelected(croppedPath ?: fullScreenshotPath)
-                    } else {
-                        // Si solo fue un tap o área muy pequeña, conserva la captura completa
-                        onAreaSelected(fullScreenshotPath)
-                    }
-                }
+                modoArrastre = 0
+                drawingView.invalidate()
                 return true
             }
         }
@@ -119,9 +275,12 @@ class GeminiCropOverlayView(
             if (cropW <= 0 || cropH <= 0) return null
 
             val croppedBmp = Bitmap.createBitmap(srcBitmap, cropX, cropY, cropW, cropH)
-            val file = File(context.cacheDir, "gemini_crop_${System.currentTimeMillis()}.png")
+            val appFlutterDir = File(context.filesDir.parentFile, "app_flutter")
+            if (!appFlutterDir.exists()) appFlutterDir.mkdirs()
+
+            val file = File(appFlutterDir, "portada_recorte_${System.currentTimeMillis()}.jpg")
             FileOutputStream(file).use { out ->
-                croppedBmp.compress(Bitmap.CompressFormat.JPEG, 88, out)
+                croppedBmp.compress(Bitmap.CompressFormat.JPEG, 90, out)
             }
             file.absolutePath
         } catch (e: Exception) {
@@ -130,50 +289,24 @@ class GeminiCropOverlayView(
         }
     }
 
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-
-        // 1. Oscurecer la pantalla
-        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paintDim)
-
-        val rect = selectionRect
-        val cornerRadius = 18f * resources.displayMetrics.density
-        val cornerLen = 28f * resources.displayMetrics.density
-
-        if (rect != null && rect.width() > 10 && rect.height() > 10) {
-            // 2. Dejar transparente el área seleccionada para que destaque la imagen/contenido
-            canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paintClear)
-
-            // 3. Resplandor exterior alrededor del recorte
-            canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paintGlow)
-
-            // 4. Dibujar las 4 esquinas blancas estilo visor de escaneo
-            dibujarEsquinasVisor(canvas, rect, cornerLen, cornerRadius)
-        }
-    }
-
     private fun dibujarEsquinasVisor(canvas: Canvas, r: RectF, len: Float, radius: Float) {
         val path = Path()
 
-        // Esquina Superior Izquierda
         path.moveTo(r.left, r.top + len)
         path.lineTo(r.left, r.top + radius)
         path.quadTo(r.left, r.top, r.left + radius, r.top)
         path.lineTo(r.left + len, r.top)
 
-        // Esquina Superior Derecha
         path.moveTo(r.right - len, r.top)
         path.lineTo(r.right - radius, r.top)
         path.quadTo(r.right, r.top, r.right, r.top + radius)
         path.lineTo(r.right, r.top + len)
 
-        // Esquina Inferior Derecha
         path.moveTo(r.right, r.bottom - len)
         path.lineTo(r.right, r.bottom - radius)
         path.quadTo(r.right, r.bottom, r.right - radius, r.bottom)
         path.lineTo(r.right - len, r.bottom)
 
-        // Esquina Inferior Izquierda
         path.moveTo(r.left + len, r.bottom)
         path.lineTo(r.left + radius, r.bottom)
         path.quadTo(r.left, r.bottom, r.left, r.bottom - radius)

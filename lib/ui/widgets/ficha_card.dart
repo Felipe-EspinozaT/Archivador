@@ -152,12 +152,13 @@ class FichaDetalleCard extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Miniatura o icono de imagen
+              // Miniatura o icono de imagen con encuadre óptimo sin recortar laterales
               ClipRRect(
                 borderRadius: BorderRadius.circular(10),
-                child: SizedBox(
-                  width: 65,
-                  height: 65,
+                child: Container(
+                  width: 68,
+                  height: 68,
+                  color: colorCat.withValues(alpha: 0.08),
                   child: _MiniaturaFicha(
                     rutaImagen: ficha.rutaImagen,
                     colorPrimario: colorCat,
@@ -233,7 +234,8 @@ class _MiniaturaFicha extends StatelessWidget {
     if (kIsWeb) {
       return Image.network(
         rutaImagen!,
-        fit: BoxFit.cover,
+        fit: BoxFit.contain,
+        alignment: Alignment.center,
         cacheWidth: 150,
         cacheHeight: 150,
         errorBuilder: (_, _, _) => _placeholder(),
@@ -255,7 +257,8 @@ class _MiniaturaFicha extends StatelessWidget {
         if (snapshot.data == true) {
           return Image.file(
             File(rutaImagen!),
-            fit: BoxFit.cover,
+            fit: BoxFit.contain,
+            alignment: Alignment.center,
             cacheWidth: 150,
             cacheHeight: 150,
             errorBuilder: (_, _, _) => _placeholder(),

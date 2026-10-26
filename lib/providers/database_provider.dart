@@ -4,6 +4,7 @@ import '../repositories/categoria_repository.dart';
 import '../repositories/etiqueta_repository.dart';
 import '../repositories/ficha_repository.dart';
 import '../services/storage_service.dart';
+import '../services/backup_package_service.dart';
 
 /// Proveedor para la instancia de base de datos
 final appDatabaseProvider = Provider<AppDatabase>((ref) {
@@ -32,4 +33,14 @@ final fichaRepositoryProvider = Provider<FichaRepository>((ref) {
 /// Proveedor para el servicio de almacenamiento de imágenes
 final storageServiceProvider = Provider<StorageService>((ref) {
   return StorageService();
+});
+
+/// Proveedor para el servicio de empaquetado y respaldo completo (datos + imágenes)
+final backupPackageServiceProvider = Provider<BackupPackageService>((ref) {
+  final catRepo = ref.watch(categoriaRepositoryProvider);
+  final fichaRepo = ref.watch(fichaRepositoryProvider);
+  return BackupPackageService(
+    categoriaRepo: catRepo,
+    fichaRepo: fichaRepo,
+  );
 });

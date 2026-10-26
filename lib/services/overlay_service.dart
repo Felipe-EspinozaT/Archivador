@@ -4,20 +4,46 @@ import 'package:flutter/services.dart';
 
 class QuickActionPayload {
   final String action;
+  final String title;
   final String text;
   final String portada;
+  final int? fichaId;
+  final int? categoriaId;
 
   QuickActionPayload({
     required this.action,
+    this.title = '',
     this.text = '',
     this.portada = '',
+    this.fichaId,
+    this.categoriaId,
   });
 
   factory QuickActionPayload.fromMap(Map<dynamic, dynamic> map) {
+    final rawFichaId = map['fichaId'];
+    final rawCatId = map['categoriaId'];
+
+    int? parsedFichaId;
+    if (rawFichaId is int && rawFichaId > 0) {
+      parsedFichaId = rawFichaId;
+    } else if (rawFichaId is num && rawFichaId.toInt() > 0) {
+      parsedFichaId = rawFichaId.toInt();
+    }
+
+    int? parsedCatId;
+    if (rawCatId is int && rawCatId > 0) {
+      parsedCatId = rawCatId;
+    } else if (rawCatId is num && rawCatId.toInt() > 0) {
+      parsedCatId = rawCatId.toInt();
+    }
+
     return QuickActionPayload(
       action: map['action']?.toString() ?? '',
+      title: map['title']?.toString() ?? '',
       text: map['text']?.toString() ?? '',
       portada: map['portada']?.toString() ?? '',
+      fichaId: parsedFichaId,
+      categoriaId: parsedCatId,
     );
   }
 }
@@ -85,5 +111,35 @@ class OverlayService {
         onPayload(QuickActionPayload.fromMap(call.arguments as Map));
       }
     });
+  }
+
+  /// Abre el selector nativo de Android (Storage Access Framework) donde el usuario
+  /// puede elegir directamente su Google Drive o carpeta del teléfono para guardar el respaldo.
+  static Future<String?> guardarArchivoSelectorSistema({
+    required String fileName,
+    required String content,
+  }) async {
+    if (!soportaOverlayNativo) return null;
+    try {
+      final res = await _channel.invokeMethod<String>('saveBackupToDriveDialog', {
+        'fileName': fileName,
+        'content': content,
+      });
+      return res;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Abre el selector nativo de Android (Storage Access Framework) para seleccionar y leer
+  /// un archivo de respaldo desde Google Drive o almacenamiento interno.
+  static Future<String?> abrirArchivoSelectorSistema() async {
+    if (!soportaOverlayNativo) return null;
+    try {
+      final res = await _channel.invokeMethod<String>('openBackupFromDriveDialog');
+      return res;
+    } catch (_) {
+      return null;
+    }
   }
 }

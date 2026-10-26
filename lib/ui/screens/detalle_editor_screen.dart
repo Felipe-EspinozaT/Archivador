@@ -22,6 +22,7 @@ class DetalleEditorScreen extends ConsumerStatefulWidget {
   final Ficha? ficha;
   final int? categoriaIdInicial;
   final String? tipoBloqueInicial;
+  final String? tituloInicial;
   final String? textoInicial;
   final String? rutaPortadaInicial;
 
@@ -30,6 +31,7 @@ class DetalleEditorScreen extends ConsumerStatefulWidget {
     this.ficha,
     this.categoriaIdInicial,
     this.tipoBloqueInicial,
+    this.tituloInicial,
     this.textoInicial,
     this.rutaPortadaInicial,
   });
@@ -62,7 +64,9 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
   @override
   void initState() {
     super.initState();
-    _tituloController = TextEditingController(text: widget.ficha?.titulo ?? '');
+    _tituloController = TextEditingController(
+      text: widget.ficha?.titulo ?? widget.tituloInicial ?? '',
+    );
 
     // Desempaquetar contenido previo
     final contenidoDesempaquetado = BloquesContenidoHelper.desempaquetar(widget.ficha?.descripcion);
@@ -259,7 +263,7 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
             id: id,
             tipo: TipoBloqueContenido.fecha,
             valor: '${seleccionada.day}/${seleccionada.month}/${seleccionada.year}',
-            proporcionAncho: 0.5,
+            proporcionAncho: 1.0,
           ),
         );
       });
@@ -794,22 +798,48 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
                             _construirGrillaBloquesModulares(),
                             const SizedBox(height: 16),
 
-                            // 7. BOTÓN CENTRAL: [+ CONTENIDO]
-                            Center(
-                              child: FilledButton.tonalIcon(
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: Colors.white.withValues(alpha: 0.9),
-                                  foregroundColor: const Color(0xFF825385),
-                                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                  elevation: 2,
-                                ),
-                                onPressed: _mostrarSelectorNuevoContenido,
-                                icon: const Icon(Icons.add, size: 20),
-                                label: const Text(
-                                  '+ Contenido',
-                                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                                ),
+                            // 7. BARRA HORIZONTAL NATURAL DE ACCIONES RÁPIDAS
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.92),
+                                borderRadius: BorderRadius.circular(20),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.05),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                                children: [
+                                  _construirBotonAccionRapida(
+                                    icono: Icons.sticky_note_2_outlined,
+                                    color: Colors.amber.shade700,
+                                    etiqueta: 'Nota',
+                                    alPresionar: () => _agregarBloqueNota(proporcionAncho: 0.5),
+                                  ),
+                                  _construirBotonAccionRapida(
+                                    icono: Icons.image_outlined,
+                                    color: const Color(0xFF825385),
+                                    etiqueta: 'Imagen',
+                                    alPresionar: _mostrarOpcionesImagenAnexa,
+                                  ),
+                                  _construirBotonAccionRapida(
+                                    icono: Icons.functions,
+                                    color: Colors.blue.shade700,
+                                    etiqueta: 'Fórmula',
+                                    alPresionar: _agregarBloqueFormula,
+                                  ),
+                                  _construirBotonAccionRapida(
+                                    icono: Icons.event_available_outlined,
+                                    color: Colors.teal.shade700,
+                                    etiqueta: 'Fecha',
+                                    alPresionar: _agregarBloqueFecha,
+                                  ),
+                                ],
                               ),
                             ),
                             const SizedBox(height: 24),
@@ -836,6 +866,43 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
                   ],
                 ),
               ),
+      ),
+    );
+  }
+
+  Widget _construirBotonAccionRapida({
+    required IconData icono,
+    required Color color,
+    required String etiqueta,
+    required VoidCallback alPresionar,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: alPresionar,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icono, color: color, size: 20),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              etiqueta,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1531,18 +1598,9 @@ class _DetalleEditorScreenState extends ConsumerState<DetalleEditorScreen> {
                       ),
                     ],
                   ),
-                  Row(
-                    children: [
-                      GestureDetector(
-                        onTap: () => _alternarProporcionBloque(index),
-                        child: const Icon(Icons.aspect_ratio, size: 15, color: Colors.black45),
-                      ),
-                      const SizedBox(width: 6),
-                      GestureDetector(
-                        onTap: () => _eliminarBloque(index),
-                        child: const Icon(Icons.close, size: 15, color: Colors.black45),
-                      ),
-                    ],
+                  GestureDetector(
+                    onTap: () => _eliminarBloque(index),
+                    child: const Icon(Icons.close, size: 16, color: Colors.black45),
                   ),
                 ],
               ),

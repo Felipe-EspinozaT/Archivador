@@ -24,17 +24,41 @@ class CaptureActivity : Activity() {
         private const val REQUEST_CODE_SCREEN_CAPTURE = 9988
         var resultCode: Int = 0
         var mediaProjectionData: Intent? = null
+        private var activeMediaProjection: MediaProjection? = null
+
+        fun detenerProjection() {
+            try {
+                activeMediaProjection?.stop()
+            } catch (_: Exception) {}
+            activeMediaProjection = null
+            mediaProjectionData = null
+        }
+
+        private fun obtenerOIniciarProjection(context: Context): MediaProjection? {
+            activeMediaProjection?.let { return it }
+            val data = mediaProjectionData ?: return null
+            return try {
+                val projectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+                val mp = projectionManager?.getMediaProjection(resultCode, data)
+                mp?.registerCallback(object : MediaProjection.Callback() {
+                    override fun onStop() {
+                        activeMediaProjection = null
+                        mediaProjectionData = null
+                    }
+                }, Handler(Looper.getMainLooper()))
+                activeMediaProjection = mp
+                mp
+            } catch (e: Exception) {
+                e.printStackTrace()
+                activeMediaProjection = null
+                mediaProjectionData = null
+                null
+            }
+        }
 
         fun capturarPantallaReal(context: Context, onResult: (String?) -> Unit) {
-            val data = mediaProjectionData
-            if (data == null) {
-                onResult(null)
-                return
-            }
-
             try {
-                val projectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
-                val mediaProjection = projectionManager?.getMediaProjection(resultCode, data.clone() as Intent)
+                val mediaProjection = obtenerOIniciarProjection(context)
                 if (mediaProjection == null) {
                     onResult(null)
                     return
@@ -63,7 +87,6 @@ class CaptureActivity : Activity() {
                     null
                 )
 
-                // Dar tiempo mínimo para renderizar el frame en el ImageReader
                 Handler(Looper.getMainLooper()).postDelayed({
                     var savedPath: String? = null
                     try {
@@ -83,31 +106,37 @@ class CaptureActivity : Activity() {
                             bitmap.copyPixelsFromBuffer(buffer)
                             image.close()
 
-                            // Cortar si hubo padding en los renglones
                             val cleanBitmap = if (rowPadding > 0) {
                                 Bitmap.createBitmap(bitmap, 0, 0, width, height)
                             } else {
                                 bitmap
                             }
 
-                            val dir = context.cacheDir
-                            val file = File(dir, "screen_portada_${System.currentTimeMillis()}.png")
+                            val appFlutterDir = File(context.filesDir.parentFile, "app_flutter")
+                            if (!appFlutterDir.exists()) appFlutterDir.mkdirs()
+
+                            val file = File(appFlutterDir, "screen_portada_${System.currentTimeMillis()}.jpg")
                             FileOutputStream(file).use { out ->
-                                cleanBitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                                cleanBitmap.compress(Bitmap.CompressFormat.JPEG, 88, out)
                             }
                             savedPath = file.absolutePath
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
                     } finally {
-                        virtualDisplay?.release()
-                        imageReader.close()
-                        mediaProjection.stop()
+                        try {
+                            virtualDisplay?.release()
+                        } catch (_: Exception) {}
+                        try {
+                            imageReader.close()
+                        } catch (_: Exception) {}
                         onResult(savedPath)
                     }
-                }, 220)
+                }, 200)
             } catch (e: Exception) {
                 e.printStackTrace()
+                activeMediaProjection = null
+                mediaProjectionData = null
                 onResult(null)
             }
         }
@@ -125,9 +154,14 @@ class CaptureActivity : Activity() {
             if (resCode == RESULT_OK && data != null) {
                 resultCode = resCode
                 mediaProjectionData = data
-                // Inmediatamente tomar la captura solicitada y notificar al servicio
-                capturarPantallaReal(applicationContext) { ruta ->
-                    XiaomiOverlayService.rutaUltimaCaptura = ruta
+                // Avisar a XiaomiOverlayService para que active FGS tipo mediaProjection y tome la captura
+                val srvIntent = Intent(this, XiaomiOverlayService::class.java).apply {
+                    action = "ACTION_CAPTURE_GRANTED"
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    startForegroundService(srvIntent)
+                } else {
+                    startService(srvIntent)
                 }
             }
             finish()

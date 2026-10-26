@@ -9,7 +9,7 @@ import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 /// Manejador principal de la base de datos SQLite para el Archivador Digital (Multiplataforma: Android, Windows y Web).
 class AppDatabase {
   static const String _nombreBaseDatos = 'archivador_digital.db';
-  static const int _versionBaseDatos = 3;
+  static const int _versionBaseDatos = 4;
 
   // Nombres de tablas
   static const String tablaCategorias = 'categorias';
@@ -105,6 +105,29 @@ class AppDatabase {
         [erranteId],
       );
     }
+    if (versionAnterior < 4) {
+      // Asegurar que existan Errante, General y Recuerdos
+      final cats = ['Errante', 'General', 'Recuerdos'];
+      for (var i = 0; i < cats.length; i++) {
+        final existe = await db.query(tablaCategorias, where: 'nombre = ?', whereArgs: [cats[i]]);
+        if (existe.isEmpty) {
+          await db.insert(tablaCategorias, {
+            'nombre': cats[i],
+            'descripcion': cats[i] == 'Errante'
+                ? 'Fichas sin categoría asignada'
+                : cats[i] == 'General'
+                    ? 'Fichas y notas generales'
+                    : 'Fotos, postales y memorias',
+            'color_hex': cats[i] == 'Errante'
+                ? '#9E9E9E'
+                : cats[i] == 'General'
+                    ? '#4CAF50'
+                    : '#E91E63',
+            'orden': i,
+          });
+        }
+      }
+    }
   }
 
   /// Creación de la estructura de tablas inicial.
@@ -154,37 +177,24 @@ class AppDatabase {
       )
     ''');
 
-    // Insertar categorías iniciales por defecto con orden correlativo
+    // Insertar ÚNICAMENTE las 3 categorías por defecto: Errante, General y Recuerdos
     await db.insert(tablaCategorias, {
-      'nombre': 'General',
-      'descripcion': 'Fichas y documentos generales',
-      'color_hex': '#4CAF50',
+      'nombre': categoriaErranteNombre,
+      'descripcion': 'Fichas sin categoría asignada',
+      'color_hex': '#9E9E9E',
       'orden': 0,
     });
     await db.insert(tablaCategorias, {
-      'nombre': 'Documentos',
-      'descripcion': 'Contratos, identificaciones y certificados',
-      'color_hex': '#2196F3',
+      'nombre': 'General',
+      'descripcion': 'Fichas y notas generales',
+      'color_hex': '#4CAF50',
       'orden': 1,
-    });
-    await db.insert(tablaCategorias, {
-      'nombre': 'Recibos',
-      'descripcion': 'Facturas, boletas y comprobantes de pago',
-      'color_hex': '#FF9800',
-      'orden': 2,
     });
     await db.insert(tablaCategorias, {
       'nombre': 'Recuerdos',
       'descripcion': 'Fotos, postales y memorias',
       'color_hex': '#E91E63',
-      'orden': 3,
-    });
-    // Categoría reservada por defecto: Errante
-    await db.insert(tablaCategorias, {
-      'nombre': categoriaErranteNombre,
-      'descripcion': 'Fichas sin categoría asignada',
-      'color_hex': '#9E9E9E',
-      'orden': 4,
+      'orden': 2,
     });
   }
 
