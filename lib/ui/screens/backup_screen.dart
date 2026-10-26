@@ -10,8 +10,6 @@ import '../../providers/categorias_provider.dart';
 import '../../providers/etiquetas_provider.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/ajustes_provider.dart';
-import '../../models/categoria.dart';
-import '../../models/ficha.dart';
 import '../../services/overlay_service.dart';
 import 'ajustes_screen.dart';
 
@@ -85,27 +83,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         });
       }
     }
-  }
-
-  Future<Map<String, dynamic>> _generarMapaRespaldo() async {
-    final catRepo = ref.read(categoriaRepositoryProvider);
-    final fichaRepo = ref.read(fichaRepositoryProvider);
-
-    final categorias = await catRepo.obtenerTodas();
-    final fichas = await fichaRepo.obtenerTodas();
-
-    return {
-      'version': 2,
-      'fecha': DateTime.now().toIso8601String(),
-      'app': 'Simplista Archivador Digital',
-      'categorias': categorias.map((c) => c.toMap()).toList(),
-      'fichas': fichas
-          .map((f) => {
-                ...f.toMap(),
-                'etiquetas': f.etiquetas.map((e) => e.nombre).toList(),
-              })
-          .toList(),
-    };
   }
 
   /// Exporta todas las categorías, fichas, etiquetas e imágenes en un paquete completo.

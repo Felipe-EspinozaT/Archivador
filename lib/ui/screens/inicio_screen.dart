@@ -15,7 +15,6 @@ import 'ajustes_screen.dart';
 import '../../providers/ajustes_provider.dart';
 import '../../providers/database_provider.dart';
 import '../../services/overlay_service.dart';
-import '../widgets/barra_lateral_xiaomi.dart';
 
 /// Pantalla principal de Simplista.
 class InicioScreen extends ConsumerStatefulWidget {

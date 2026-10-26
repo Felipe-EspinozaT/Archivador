@@ -228,7 +228,7 @@ class XiaomiOverlayService : Service() {
         windowManager?.addView(contenedor, params)
     }
 
-    /// Al presionar la "S", va DIRECTO al recorte sin pasar por menús
+    /// Al presionar la opción de captura, va directo al recorte reutilizando la sesión de captura activa
     private fun activarCapturaDirecta() {
         if (CaptureActivity.mediaProjectionData == null) {
             val intent = Intent(this, CaptureActivity::class.java).apply {
@@ -236,7 +236,6 @@ class XiaomiOverlayService : Service() {
             }
             startActivity(intent)
         } else {
-            // Ocultar pestaña para una captura limpia
             edgeHandleView?.visibility = View.INVISIBLE
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 CaptureActivity.capturarPantallaReal(this) { ruta ->
@@ -246,7 +245,6 @@ class XiaomiOverlayService : Service() {
                         rutaUltimaCaptura = ruta
                         iniciarModoSeleccionGemini()
                     } else {
-                        // Si la sesión expiró, volver a pedir permiso automáticamente
                         val intent = Intent(this, CaptureActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION
                         }
@@ -257,7 +255,7 @@ class XiaomiOverlayService : Service() {
         }
     }
 
-    /// Activa el marco de pantalla con oscurecimiento y selección de área rectangular (estilo Gemini)
+    /// Activa el marco de pantalla completa 1:1 (sin achicar ni restar barras del sistema)
     private fun iniciarModoSeleccionGemini() {
         removerSelectorRecorte()
         cerrarModalNota()
@@ -297,13 +295,28 @@ class XiaomiOverlayService : Service() {
             }
         )
 
+        val metrics = android.util.DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager?.defaultDisplay?.getRealMetrics(metrics)
+        val realW = if (metrics.widthPixels > 0) metrics.widthPixels else WindowManager.LayoutParams.MATCH_PARENT
+        val realH = if (metrics.heightPixels > 0) metrics.heightPixels else WindowManager.LayoutParams.MATCH_PARENT
+
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+            realW,
+            realH,
             obtenerTipoVentana(),
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
-        )
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
 
         cropOverlayView = cropView
         windowManager?.addView(cropView, params)

@@ -112,6 +112,7 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "stopOverlay" -> {
+                    CaptureActivity.detenerProjection()
                     val srvIntent = Intent(this, XiaomiOverlayService::class.java)
                     stopService(srvIntent)
                     result.success(true)

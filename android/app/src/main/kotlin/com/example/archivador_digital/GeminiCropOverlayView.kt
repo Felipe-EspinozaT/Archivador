@@ -83,10 +83,12 @@ class GeminiCropOverlayView(
 
             override fun onDraw(canvas: Canvas) {
                 super.onDraw(canvas)
-                // 1. Pintar la captura congelada de fondo si existe
+                // 1. Pintar la captura congelada de fondo en escala 1:1 exacta (sin achicar por barras del sistema)
                 val bmp = fullBitmap
                 if (bmp != null) {
-                    val dest = Rect(0, 0, width, height)
+                    val loc = IntArray(2)
+                    getLocationOnScreen(loc)
+                    val dest = Rect(-loc[0], -loc[1], -loc[0] + bmp.width, -loc[1] + bmp.height)
                     canvas.drawBitmap(bmp, null, dest, paintBitmap)
                 }
 
@@ -264,13 +266,13 @@ class GeminiCropOverlayView(
     private fun recortarBitmap(rect: RectF): String? {
         val srcBitmap = fullBitmap ?: return null
         return try {
-            val scaleX = srcBitmap.width.toFloat() / width.toFloat()
-            val scaleY = srcBitmap.height.toFloat() / height.toFloat()
+            val loc = IntArray(2)
+            drawingView.getLocationOnScreen(loc)
 
-            val cropX = max(0, (rect.left * scaleX).toInt())
-            val cropY = max(0, (rect.top * scaleY).toInt())
-            val cropW = min(srcBitmap.width - cropX, (rect.width() * scaleX).toInt())
-            val cropH = min(srcBitmap.height - cropY, (rect.height() * scaleY).toInt())
+            val cropX = (rect.left + loc[0]).toInt().coerceIn(0, max(0, srcBitmap.width - 1))
+            val cropY = (rect.top + loc[1]).toInt().coerceIn(0, max(0, srcBitmap.height - 1))
+            val cropW = rect.width().toInt().coerceIn(1, srcBitmap.width - cropX)
+            val cropH = rect.height().toInt().coerceIn(1, srcBitmap.height - cropY)
 
             if (cropW <= 0 || cropH <= 0) return null
 
